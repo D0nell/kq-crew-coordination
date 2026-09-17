@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-dataset-generator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas numpy scikit-learn
+
+      - name: Run dataset generator (smoke test)
+        run: python data/generate_dataset.py --n-transit 500 --n-flights 200 --outdir data/output
+
+      - name: Verify all 7 tables were produced
+        run: |
+          test -f data/output/Users.csv
+          test -f data/output/Crew_Profiles.csv
+          test -f data/output/Flight_Schedules.csv
+          test -f data/output/Vehicles.csv
+          test -f data/output/Transit_Events.csv
+          test -f data/output/Mobilization_Log.csv
+          test -f data/output/Alerts.csv
+          echo "All 7 tables generated successfully."
