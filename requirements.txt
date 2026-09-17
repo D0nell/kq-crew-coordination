@@ -1,0 +1,19 @@
+# Core
+pandas>=2.0
+numpy>=1.26
+
+# ML (as named in Proposal Section 3.8 — Tools and Techniques)
+scikit-learn>=1.4
+xgboost>=2.0
+
+# API (Python backend, per proposal)
+fastapi>=0.110
+uvicorn>=0.29
+
+# Utilities
+python-dotenv>=1.0
+psycopg2-binary>=2.9   # PostgreSQL driver
+
+# Dev
+pytest>=8.0
+jupyter>=1.0

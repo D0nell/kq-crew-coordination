@@ -1,0 +1,46 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- Data (kept on Google Drive, not in git) ---
+data/output/*.csv
+data/output/*.parquet
+
+# --- ML artifacts ---
+*.pkl
+*.joblib
+*.h5
+ml/training/checkpoints/
+mlruns/
+
+# --- Android / Kotlin (once mobile/ is a real Android Studio project) ---
+mobile/.gradle/
+mobile/build/
+mobile/local.properties
+mobile/*.iml
+mobile/.idea/
+mobile/captures/
+mobile/*.apk
+mobile/*.aab
+
+# Safety net: catches .idea/ if Android Studio ever gets pointed at the
+# repo root instead of mobile/ (shouldn't happen if you follow mobile/README.md)
+/.idea/
+/*.iml
+
+# --- VS Code ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets ---
+.env
+*.pem
