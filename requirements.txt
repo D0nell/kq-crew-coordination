@@ -17,3 +17,5 @@ psycopg2-binary>=2.9   # PostgreSQL driver
 # Dev
 pytest>=8.0
 jupyter>=1.0
+
+imbalanced-learn>=0.12
