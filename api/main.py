@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, PositiveInt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from ml.preprocessing.load_data import encode_new_record  # noqa: E402
+from ml.preprocessing.load_data import CATEGORICAL_COLS, encode_new_record  # noqa: E402
 
 from . import scoring  # noqa: E402
 from .config import get_alert_threshold, get_model_path  # noqa: E402
@@ -98,6 +98,21 @@ def root():
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
     return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"), media_type="text/html")
+
+
+@app.get("/predict", include_in_schema=False)
+def predict_page():
+    return FileResponse(os.path.join(STATIC_DIR, "predict.html"), media_type="text/html")
+
+
+@app.get("/api/options")
+def options():
+    """
+    The exact category values the model was trained on, read from its encoders, so the
+    prediction form's dropdowns can never drift from what the model accepts.
+    """
+    encoders = scoring.load_bundle()["encoders"]
+    return {col: [str(c) for c in encoders[col].classes_] for col in CATEGORICAL_COLS}
 
 
 @app.get("/health")

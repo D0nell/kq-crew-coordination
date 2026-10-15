@@ -8,7 +8,7 @@ The core workflow runs end to end: transits stored in PostgreSQL are turned into
 
 | Component | Implementation |
 |---|---|
-| Interface | Single-page dashboard (HTML, CSS, vanilla JavaScript), served by FastAPI at `/dashboard` |
+| Interface | Two pages in plain HTML, CSS and JavaScript, served by FastAPI: the transit queue dashboard (`/dashboard`) and a what-if prediction form for all 14 inputs (`/predict`) |
 | Application logic | `api/scoring.py`: feature query, encoding, scoring, alert create/update/auto-clear |
 | API | FastAPI, 8 endpoints, input validation by Pydantic, clear 404/422/503 responses |
 | Database | PostgreSQL 7 base tables plus `predictions`; `alerts` extended (migration `001_sprint2.sql`) |
@@ -37,15 +37,18 @@ The core workflow runs end to end: transits stored in PostgreSQL are turned into
 
 ## 5.4 Test results
 
-31 test cases (44 checks), all passing on the first complete run: see `docs/test_log.md` for the table of test, expected result, actual result and corrective action.
+34 test cases (47 checks), all passing on the first complete run (44 of them also confirmed on the student's own Windows machine with PostgreSQL 18): see `docs/test_log.md` for the table of test, expected result, actual result and corrective action.
 
 - Expected behaviour: TC-01 to TC-19 (loader, listing, scoring, alerts, resolve, summary figures checked against scikit-learn, leakage guard).
 - Invalid input: TC-20 to TC-26 (unknown or malformed ids, bad batch bodies, bad query values, unseen categories).
 - Failure conditions: TC-27 to TC-31 (missing model, corrupt model, database down, dashboard served, one bad record in a batch).
+- Prediction form support: TC-32 to TC-34 (dropdown values equal the model's categories, every option is accepted, all 14 fields are on the page).
 
 To check the tests can fail, two deliberate faults were introduced into the scoring code (a shifted alert threshold, and removal of the auto-clear rule). Each was caught by the expected test (TC-11 and TC-13), then the faults were reverted.
 
 Defects found and fixed during development (before the full suite existed):
+- Prediction form: the Clear button had `id="reset"`, which shadowed the form's own `reset()` method so Clear did nothing. Found by an automated browser test of the form, fixed by renaming the button.
+- Handover category list: the written list had two misspelt corridors (`MedicalCentre - JKIA`, `Westlands -JKIA`); the model and data use `Medical Centre - JKIA` and `Westlands - JKIA`. Checked against the model encoders and the CSV, and the form now reads its options from the model (`/api/options`) instead of hardcoding them.
 - Alert insert had 7 placeholders but 8 values per row; found by reading the code, fixed before the first run.
 - Dashboard: button text wrapped, a favicon request returned 404, and the table overflowed on narrow screens; found in the browser, fixed.
 

@@ -279,3 +279,45 @@ def test_unseen_category_fails_only_that_transit(client, q, actual):
     failed_ids = [f["transit_id"] for f in b["failed"]]
     assert ids[0] in failed_ids and b["scored"] == len(ids) - len(failed_ids) and b["scored"] >= 1
     actual(f"failed={failed_ids} with reason '{b['failed'][0]['reason'][:60]}'; scored={b['scored']}")
+
+
+# ------------------------------------------------------------------ prediction form support
+GOOD_BODY = {"is_weekday": 1, "is_rush_hour": 1, "weather_flag": 0, "traffic_congestion_index": 0.6,
+             "historical_avg_delay_min": 12.0, "distance_km": 20.0, "hour_of_day": 8, "day_of_week": 1, "capacity": 14}
+
+
+def test_options_match_model(client, actual):
+    """TC-32 | GET /api/options (feeds the form dropdowns) | returns exactly the categories in the model's encoders for all 5 categorical fields"""
+    from api.scoring import load_bundle
+    enc = load_bundle()["encoders"]
+    got = client.get("/api/options").json()
+    assert set(got) == {"corridor", "rank", "base_location", "vehicle_type", "destination"}
+    for k, values in got.items():
+        assert values == [str(c) for c in enc[k].classes_]
+        assert len(values) > 0
+    actual("5 fields returned; " + ", ".join(f"{k}={len(v)}" for k, v in got.items()))
+
+
+def test_every_option_is_accepted_by_predict(client, actual):
+    """TC-33 | Every value offered in the dropdowns is sent to /predict-delay-risk | each is accepted (HTTP 200), none rejected as unseen"""
+    opts = client.get("/api/options").json()
+    base = {k: v[0] for k, v in opts.items()}
+    checked = 0
+    for field, values in opts.items():
+        for v in values:
+            r = client.post("/predict-delay-risk", json={**GOOD_BODY, **base, field: v})
+            assert r.status_code == 200, (field, v, r.text)
+            checked += 1
+    actual(f"{checked} option values tested, all HTTP 200")
+
+
+def test_predict_page_has_all_fields(client, actual):
+    """TC-34 | GET /predict | HTML page is served and contains an input for each of the 14 model fields"""
+    r = client.get("/predict")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    fields = ["is_weekday", "is_rush_hour", "weather_flag", "traffic_congestion_index", "historical_avg_delay_min",
+              "distance_km", "hour_of_day", "day_of_week", "capacity", "corridor", "rank", "base_location",
+              "vehicle_type", "destination"]
+    missing = [f for f in fields if f'name="{f}"' not in r.text]
+    assert not missing, missing
+    actual("Page served; all 14 field names present")

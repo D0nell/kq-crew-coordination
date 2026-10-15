@@ -10,7 +10,8 @@ Status key: Done / In progress / Not started. FR numbers are from the SRS in the
 | 4 | Scoring service: features from DB, store prediction, raise or clear alert | Predictive model, Integration | FR-04, FR-05 | Done | `api/scoring.py`, TC-10 to TC-13 |
 | 5 | REST API (list, score, batch, alerts, resolve, summary, health) | Integration | FR-04, FR-05 | Done | `api/main.py`, TC-07 to TC-18 |
 | 6 | Dispatcher dashboard (queue, risk, alerts, resolve, replay metrics) | Interface | FR-05 | Done | `docs/screenshots/` |
-| 7 | Initial testing: expected, invalid input, failure conditions | Quality | - | Done (31 test cases, 44 checks) | `docs/test_log.md` |
+| 6b | What-if prediction form: all 14 inputs, validation, loading state, result panel, error handling | Interface | FR-04 | Done | `api/static/predict.html`, TC-32 to TC-34, `docs/screenshots/07_*` to `11_*` |
+| 7 | Initial testing: expected, invalid input, failure conditions | Quality | - | Done (34 test cases, 47 checks) | `docs/test_log.md` |
 | 8 | Baseline evaluation, separate validation and test data, baselines | Evaluation | - | Done | `docs/evaluation_results.md` |
 | 9 | CI with PostgreSQL service running the tests | Automation | - | Done (confirm green on GitHub) | `.github/workflows/ci.yml` |
 | 10 | README with setup and demo steps, known limitations | Documentation | - | Done | `README.md`, `docs/known_limitations.md` |
