@@ -2,9 +2,11 @@
 pandas>=2.0
 numpy>=1.26
 
-# ML (as named in Proposal Section 3.8 — Tools and Techniques)
+# ML (as named in Proposal Section 3.8 - Tools and Techniques)
 scikit-learn>=1.4
 xgboost>=2.0
+imbalanced-learn>=0.12
+joblib>=1.3
 
 # API (Python backend, per proposal)
 fastapi>=0.110
@@ -14,9 +16,7 @@ uvicorn>=0.29
 python-dotenv>=1.0
 psycopg2-binary>=2.9   # PostgreSQL driver
 
-# Dev
+# Dev and tests
 pytest>=8.0
+httpx>=0.27
 jupyter>=1.0
-
-imbalanced-learn>=0.12
- joblib>=1.3

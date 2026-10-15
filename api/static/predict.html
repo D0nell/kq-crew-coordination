@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KQ Crew Coordination — Delay Risk</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #eceff2; --surface: #ffffff; --ink: #15202b; --ink-2: #44505c; --muted: #66727e;
+    --line: #d8dde2; --line-soft: #e8ebee; --focus: #2459d6; --btn: #15202b; --btn-ink: #ffffff;
+    --track: #dfe4e8; --fill: #55616d;
+    --low-ink: #17673a;  --low-bg: #e1f2e7;
+    --med-ink: #7a5600;  --med-bg: #fbf0cf;
+    --high-ink: #9b3d00; --high-bg: #fde5d3;
+    --crit-ink: #a3121f; --crit-bg: #fbdcdf;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f151b; --surface: #18212a; --ink: #e8edf1; --ink-2: #b4bec8; --muted: #8e9aa6;
+      --line: #2a3541; --line-soft: #222c36; --focus: #7aa2ff; --btn: #e8edf1; --btn-ink: #0f151b;
+      --track: #2a3541; --fill: #8e9aa6;
+      --low-ink: #7fd6a0;  --low-bg: #16301f;
+      --med-ink: #ecc766;  --med-bg: #3a2f10;
+      --high-ink: #f4a56e; --high-bg: #3c2412;
+      --crit-ink: #ff8f98; --crit-bg: #421a1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    font-variant-numeric: tabular-nums; }
+  header { background: var(--surface); border-bottom: 1px solid var(--line); padding: 16px 24px 0; }
+  .titlebar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  nav { display: flex; gap: 20px; margin-top: 10px; }
+  nav a { color: var(--ink-2); text-decoration: none; padding: 8px 0 9px; border-bottom: 2px solid transparent; font-size: 14px; }
+  nav a[aria-current="page"] { color: var(--ink); font-weight: 650; border-bottom-color: var(--ink); }
+  nav a:hover { color: var(--ink); }
+  .note { padding: 8px 24px; background: var(--med-bg); color: var(--med-ink); font-size: 12.5px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; padding: 20px 24px 40px; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); padding: 16px 12px 32px; } }
+  section.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+  .panel > h2 { font-size: 15px; font-weight: 650; margin: 0; padding: 14px 16px 0; }
+  .panel > p.hint { margin: 2px 16px 0; color: var(--muted); font-size: 13px; }
+  form { padding: 4px 16px 16px; }
+  fieldset { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
+  legend { font-size: 13px; font-weight: 650; color: var(--ink-2); padding: 0 0 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px 16px; }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .field label { font-size: 13px; color: var(--ink-2); }
+  .field small { color: var(--muted); font-size: 12px; }
+  input, select { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 9px; width: 100%; }
+  input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--crit-ink); }
+  .err { color: var(--crit-ink); font-size: 12.5px; min-height: 0; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; align-items: center; }
+  button { font: inherit; cursor: pointer; border-radius: 4px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); padding: 8px 14px; white-space: nowrap; }
+  button.primary { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  button:hover:not(:disabled) { border-color: var(--ink-2); }
+  .banner { margin: 12px 16px 0; padding: 10px 12px; border-radius: 4px; background: var(--crit-bg); color: var(--crit-ink); font-weight: 600; }
+  .banner ul { margin: 6px 0 0; padding-left: 18px; font-weight: 400; }
+  aside .body { padding: 16px; }
+  .empty { color: var(--ink-2); }
+  .empty p { margin: 0 0 8px; }
+  .verdict { font-size: 18px; font-weight: 650; margin: 0 0 14px; }
+  .bignum { font-size: 40px; font-weight: 650; line-height: 1; }
+  .bignum small { font-size: 16px; font-weight: 500; color: var(--muted); }
+  .cap { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .meter { margin: 14px 0 4px; }
+  .track { position: relative; height: 8px; border-radius: 4px; background: var(--track); }
+  .track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--fill); }
+  .track i.over { background: var(--crit-ink); }
+  .track b { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink); border-radius: 1px; }
+  .tag { display: inline-flex; align-items: center; gap: 6px; border-radius: 3px; padding: 3px 10px 3px 8px; font-size: 14px; font-weight: 650; }
+  .tag svg { width: 11px; height: 11px; fill: currentColor; }
+  .LOW { background: var(--low-bg); color: var(--low-ink); }
+  .MEDIUM { background: var(--med-bg); color: var(--med-ink); }
+  .HIGH { background: var(--high-bg); color: var(--high-ink); }
+  .CRITICAL { background: var(--crit-bg); color: var(--crit-ink); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+  .fine { color: var(--muted); font-size: 12.5px; margin-top: 16px; }
+  a { color: var(--focus); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1>KQ Crew Coordination: Delay Risk</h1>
+    <span class="sub">Predict whether a crew transit to JKIA will run 20+ minutes late</span>
+  </div>
+  <nav aria-label="Pages">
+    <a href="/dashboard">Transit queue</a>
+    <a href="/predict" aria-current="page">What-if prediction</a>
+  </nav>
+</header>
+<div class="note">Synthetic data and a model trained on it. Results show the pipeline works; they are not an operational forecast.</div>
+
+<main>
+  <section class="panel" aria-labelledby="fh">
+    <h2 id="fh">Transit details</h2>
+    <p class="hint">Everything here is known before the trip starts. The form sends these 14 values to the model's API.</p>
+    <div id="formError" class="banner" role="alert" hidden></div>
+    <form id="f" novalidate>
+      <fieldset>
+        <legend>When</legend>
+        <div class="grid">
+          <div class="field"><label for="hour_of_day">Hour of day (0–23)</label>
+            <input id="hour_of_day" name="hour_of_day" type="number" min="0" max="23" step="1" required><span class="err" data-for="hour_of_day"></span></div>
+          <div class="field"><label for="day_of_week">Day of week</label>
+            <select id="day_of_week" name="day_of_week" required>
+              <option value="">Select…</option>
+              <option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option>
+              <option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option>
+            </select><span class="err" data-for="day_of_week"></span></div>
+          <div class="field"><label for="is_weekday">Weekday</label>
+            <select id="is_weekday" name="is_weekday" required><option value="">Select…</option><option value="1">Yes</option><option value="0">No</option></select><span class="err" data-for="is_weekday"></span></div>
+          <div class="field"><label for="is_rush_hour">Rush hour</label>
+            <select id="is_rush_hour" name="is_rush_hour" required><option value="">Select…</option><option value="1">Yes</option><option value="0">No</option></select><span class="err" data-for="is_rush_hour"></span></div>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Conditions</legend>
+        <div class="grid">
+          <div class="field"><label for="weather_flag">Bad weather</label>
+            <select id="weather_flag" name="weather_flag" required><option value="">Select…</option><option value="1">Yes</option><option value="0">No</option></select><span class="err" data-for="weather_flag"></span></div>
+          <div class="field"><label for="traffic_congestion_index">Traffic congestion (0 to 1)</label>
+            <input id="traffic_congestion_index" name="traffic_congestion_index" type="number" min="0" max="1" step="0.01" required><span class="err" data-for="traffic_congestion_index"></span></div>
+          <div class="field"><label for="historical_avg_delay_min">Usual delay on this route (min)</label>
+            <input id="historical_avg_delay_min" name="historical_avg_delay_min" type="number" min="0" step="0.1" required><span class="err" data-for="historical_avg_delay_min"></span></div>
+          <div class="field"><label for="distance_km">Distance (km)</label>
+            <input id="distance_km" name="distance_km" type="number" min="0.1" step="0.1" required><span class="err" data-for="distance_km"></span></div>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Route, crew and vehicle</legend>
+        <div class="grid">
+          <div class="field"><label for="corridor">Corridor</label><select id="corridor" name="corridor" required></select><span class="err" data-for="corridor"></span></div>
+          <div class="field"><label for="destination">Flight destination</label><select id="destination" name="destination" required></select><span class="err" data-for="destination"></span></div>
+          <div class="field"><label for="rank">Crew rank</label><select id="rank" name="rank" required></select><span class="err" data-for="rank"></span></div>
+          <div class="field"><label for="base_location">Crew base</label><select id="base_location" name="base_location" required></select><span class="err" data-for="base_location"></span></div>
+          <div class="field"><label for="vehicle_type">Vehicle type</label><select id="vehicle_type" name="vehicle_type" required></select><span class="err" data-for="vehicle_type"></span></div>
+          <div class="field"><label for="capacity">Vehicle capacity (seats)</label>
+            <input id="capacity" name="capacity" type="number" min="1" step="1" required><span class="err" data-for="capacity"></span></div>
+        </div>
+      </fieldset>
+      <div class="actions">
+        <button type="submit" class="primary" id="go">Predict delay risk</button>
+        <button type="button" id="example">Fill with an example</button>
+        <button type="button" id="clear">Clear form</button>
+      </div>
+    </form>
+  </section>
+
+  <aside class="panel" aria-labelledby="rh" aria-live="polite">
+    <h2 id="rh">Result</h2>
+    <div class="body" id="result">
+      <div class="empty"><p>No prediction yet.</p><p>Fill in the form, or choose <strong>Fill with an example</strong>, then press <strong>Predict delay risk</strong>.</p></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const CATS = ['corridor', 'rank', 'base_location', 'vehicle_type', 'destination'];
+const INTS = ['is_weekday', 'is_rush_hour', 'weather_flag', 'hour_of_day', 'day_of_week', 'capacity'];
+const FLOATS = ['traffic_congestion_index', 'historical_avg_delay_min', 'distance_km'];
+const FIELDS = [...INTS, ...FLOATS, ...CATS];
+const LABEL = { corridor: 'Corridor', rank: 'Crew rank', base_location: 'Crew base', vehicle_type: 'Vehicle type',
+  destination: 'Flight destination', is_weekday: 'Weekday', is_rush_hour: 'Rush hour', weather_flag: 'Bad weather',
+  traffic_congestion_index: 'Traffic congestion', historical_avg_delay_min: 'Usual delay', distance_km: 'Distance',
+  hour_of_day: 'Hour of day', day_of_week: 'Day of week', capacity: 'Vehicle capacity' };
+const ICON = {
+  LOW: '<svg viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4.5"/></svg>',
+  MEDIUM: '<svg viewBox="0 0 10 10" aria-hidden="true"><rect x=".5" y=".5" width="9" height="9"/></svg>',
+  HIGH: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .3 9.7 5 5 9.7.3 5z"/></svg>',
+  CRITICAL: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .5 9.7 9.5H.3z"/></svg>' };
+const EXAMPLE = { is_weekday: 1, is_rush_hour: 1, weather_flag: 0, traffic_congestion_index: 0.8,
+  historical_avg_delay_min: 25, distance_km: 18.5, hour_of_day: 8, day_of_week: 1, capacity: 14,
+  corridor: 'Mombasa Rd - JKIA', rank: 'Captain', base_location: 'JKIA Base', vehicle_type: 'Crew Van', destination: 'LHR' };
+const RESULT_EMPTY = $('result').innerHTML;
+let threshold = 0.5;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+function showBanner(title, lines) {
+  const b = $('formError');
+  b.innerHTML = esc(title) + (lines && lines.length ? '<ul>' + lines.map(l => '<li>' + esc(l) + '</li>').join('') + '</ul>' : '');
+  b.hidden = false;
+}
+function clearErrors() {
+  $('formError').hidden = true;
+  document.querySelectorAll('.err').forEach(e => e.textContent = '');
+  FIELDS.forEach(k => $(k).removeAttribute('aria-invalid'));
+}
+function fieldError(name, msg) {
+  const e = document.querySelector(`.err[data-for="${name}"]`);
+  if (e) e.textContent = msg;
+  if ($(name)) $(name).setAttribute('aria-invalid', 'true');
+}
+
+async function loadOptions() {
+  try {
+    const r = await fetch('/api/options');
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const opts = await r.json();
+    CATS.forEach(k => {
+      $(k).innerHTML = '<option value="">Select…</option>' + opts[k].map(v => `<option>${esc(v)}</option>`).join('');
+    });
+    try { const h = await (await fetch('/health')).json(); threshold = h.alert_threshold ?? 0.5; } catch (_) {}
+  } catch (e) {
+    showBanner('Could not load the dropdown options from the server.', [String(e.message || e), 'Check that the API is running, then reload this page.']);
+    $('go').disabled = true;
+  }
+}
+
+// Client-side checks mirror the API's own limits so people get a clear message before sending.
+function validate() {
+  let ok = true;
+  const bad = (k, m) => { fieldError(k, m); ok = false; };
+  CATS.forEach(k => { if (!$(k).value) bad(k, 'Choose a value.'); });
+  ['is_weekday', 'is_rush_hour', 'weather_flag', 'day_of_week'].forEach(k => { if ($(k).value === '') bad(k, 'Choose a value.'); });
+  const num = (k, min, max, integer, minExclusive) => {
+    const raw = $(k).value.trim();
+    if (raw === '') return bad(k, 'Required.');
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return bad(k, 'Enter a number.');
+    if (integer && !Number.isInteger(v)) return bad(k, 'Enter a whole number.');
+    if (minExclusive ? v <= min : v < min) return bad(k, minExclusive ? `Must be greater than ${min}.` : `Must be ${min} or more.`);
+    if (max !== undefined && v > max) bad(k, `Must be ${max} or less.`);
+  };
+  num('hour_of_day', 0, 23, true);
+  num('traffic_congestion_index', 0, 1, false);
+  num('historical_avg_delay_min', 0, undefined, false);
+  num('distance_km', 0, undefined, false, true);
+  num('capacity', 0, undefined, true, true);
+  return ok;
+}
+
+function payload() {
+  const o = {};
+  INTS.forEach(k => o[k] = parseInt($(k).value, 10));
+  FLOATS.forEach(k => o[k] = parseFloat($(k).value));
+  CATS.forEach(k => o[k] = $(k).value);
+  return o;
+}
+
+function render(r) {
+  const pct = (r.delay_probability * 100).toFixed(1);
+  const over = r.delay_probability >= threshold;
+  $('result').innerHTML = `
+    <p class="verdict">${r.delayed ? 'Delay likely' : 'Delay not expected'}</p>
+    <div class="bignum">${pct}<small>%</small></div>
+    <div class="cap">probability of a delay of 20+ minutes</div>
+    <div class="meter" role="img" aria-label="Probability ${pct} percent, alert threshold ${(threshold * 100).toFixed(0)} percent">
+      <div class="track"><i class="${over ? 'over' : ''}" style="width:${Math.min(100, r.delay_probability * 100)}%"></i><b style="left:${threshold * 100}%"></b></div>
+      <div class="cap">Tick mark: alert threshold, ${(threshold * 100).toFixed(0)}%</div>
+    </div>
+    <div class="row"><span class="tag ${esc(r.risk_level)}">${ICON[r.risk_level] || ''}${esc(r.risk_level)} risk</span></div>
+    <div class="row"><button type="button" id="again">Make another prediction</button></div>
+    <p class="fine">Not saved. To score stored transits and raise alerts, use the <a href="/dashboard">transit queue</a>.</p>`;
+  $('again').onclick = () => { $('result').innerHTML = RESULT_EMPTY; clearErrors(); $('hour_of_day').focus(); };
+}
+
+function showApiError(status, body) {
+  const d = body && body.detail;
+  if (Array.isArray(d)) {                              // FastAPI validation errors
+    const lines = [];
+    d.forEach(x => {
+      const name = x.loc && x.loc[x.loc.length - 1];
+      const label = LABEL[name] || name || 'Input';
+      lines.push(`${label}: ${x.msg}`);
+      if (name in LABEL) fieldError(name, x.msg);
+    });
+    showBanner('The server rejected the request (HTTP ' + status + ').', lines);
+  } else if (typeof d === 'string') {                  // e.g. unseen category
+    const m = d.match(/'([a-z_]+)'/);
+    if (m && m[1] in LABEL) fieldError(m[1], d);
+    showBanner(status === 422 ? 'The server rejected the request (HTTP 422).' : `The server reported a problem (HTTP ${status}).`, [d]);
+  } else {
+    showBanner(`The server reported a problem (HTTP ${status}).`, []);
+  }
+}
+
+$('f').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  clearErrors();
+  if (!validate()) { showBanner('Please fix the highlighted fields.', []); return; }
+  const btn = $('go'); btn.disabled = true; btn.textContent = 'Predicting…';
+  try {
+    const res = await fetch('/predict-delay-risk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
+    let body = null; try { body = await res.json(); } catch (_) {}
+    if (res.ok) render(body); else showApiError(res.status, body);
+  } catch (e) {
+    showBanner('Cannot reach the prediction server.', ['Check that the API is running (python -m uvicorn api.main:app --reload) and try again.']);
+  } finally { btn.disabled = false; btn.textContent = 'Predict delay risk'; }
+});
+
+$('example').onclick = () => { clearErrors(); FIELDS.forEach(k => $(k).value = EXAMPLE[k]); };
+$("clear").onclick = () => { clearErrors(); $('f').reset(); $('result').innerHTML = RESULT_EMPTY; };
+loadOptions();
+</script>
+</body>
+</html>

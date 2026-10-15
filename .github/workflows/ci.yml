@@ -4,33 +4,37 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
-  validate-dataset-generator:
+  test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install pandas numpy scikit-learn
-
-      - name: Run dataset generator (smoke test)
-        run: python data/generate_dataset.py --n-transit 500 --n-flights 200 --outdir data/output
-
-      - name: Verify all 7 tables were produced
-        run: |
-          test -f data/output/Users.csv
-          test -f data/output/Crew_Profiles.csv
-          test -f data/output/Flight_Schedules.csv
-          test -f data/output/Vehicles.csv
-          test -f data/output/Transit_Events.csv
-          test -f data/output/Mobilization_Log.csv
-          test -f data/output/Alerts.csv
-          echo "All 7 tables generated successfully."
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Compile check
+        run: python -m compileall -q api db ml data
+      - name: Run tests (builds its own kq_test database, dataset and model)
+        run: pytest
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: docs/test_log.md
