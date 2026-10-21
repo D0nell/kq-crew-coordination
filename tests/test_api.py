@@ -321,3 +321,24 @@ def test_predict_page_has_all_fields(client, actual):
     missing = [f for f in fields if f'name="{f}"' not in r.text]
     assert not missing, missing
     actual("Page served; all 14 field names present")
+
+
+# ------------------------------------------------------------------ shared design system (Sprint III, Stage 2)
+def test_design_assets_served(client, actual):
+    """TC-35 | GET /static/kq.css and /static/kq.js | the shared stylesheet and status script are served with the right content types and define the KQ tokens"""
+    css = client.get("/static/kq.css")
+    js = client.get("/static/kq.js")
+    assert css.status_code == 200 and "text/css" in css.headers["content-type"]
+    assert "--kq-red" in css.text and "--kq-navy" in css.text and "--crit-ink" in css.text
+    assert js.status_code == 200 and "javascript" in js.headers["content-type"] and "/health" in js.text
+    actual("kq.css 200 text/css with KQ tokens; kq.js 200 javascript")
+
+
+def test_pages_share_layout(client, actual):
+    """TC-36 | GET /dashboard and GET /predict | both pages load the shared stylesheet and script, show the same navigation, a system-status chip and the synthetic-data notice"""
+    for path in ("/dashboard", "/predict"):
+        t = client.get(path).text
+        for needle in ('href="/static/kq.css"', 'src="/static/kq.js"', 'id="sysStatus"',
+                       'href="/dashboard"', 'href="/predict"', "Synthetic data"):
+            assert needle in t, (path, needle)
+    actual("both pages: stylesheet, script, nav links, status chip and synthetic-data notice present")

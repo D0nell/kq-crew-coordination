@@ -1,6 +1,6 @@
 # Test log
 
-Generated 2026-10-15 10:30 by `pytest`. Result: **47 of 47 checks passed** across 34 test cases (a test case with several inputs counts one check per input).
+Generated 2026-10-21 09:36 by `pytest`. Result: **49 of 49 checks passed** across 36 test cases (a test case with several inputs counts one check per input).
 
 Run against a throw-away database (`kq_test`) with a small synthetic dataset and a model trained on it, so the suite never touches the working database.
 
@@ -10,7 +10,7 @@ Run against a throw-away database (`kq_test`) with a small synthetic dataset and
 | TC-02 | Loader: an empty database gets the schema and the Sprint II migration | tables, predictions table and alert columns exist after loading | Fresh database created with predictions table and the 4 new alert columns | PASSED | None needed |
 | TC-03 | Loader: running the load twice gives the same counts and new rows still get fresh ids | same counts, no duplicate-key error on insert | Second load returned identical counts (8630 rows); insert after reload succeeded | PASSED | None needed |
 | TC-04 | Loader: no child row points at a missing parent | zero orphan rows | 0 orphans across 4 relationships | PASSED | None needed |
-| TC-05 | Loader: a CSV is missing from the data folder | FileNotFoundError naming the file; existing data untouched | Raised FileNotFoundError: C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-1\test_missing_csv_is_reported0\broken\Vehicles.csv not found. Generate the data first: python data/generate_dataset.py --outdir C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-1\test_missing_csv_is_reported0\broken; transit_events still populated | PASSED | None needed |
+| TC-05 | Loader: a CSV is missing from the data folder | FileNotFoundError naming the file; existing data untouched | Raised FileNotFoundError: C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-2\test_missing_csv_is_reported0\broken\Vehicles.csv not found. Generate the data first: python data/generate_dataset.py --outdir C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-2\test_missing_csv_is_reported0\broken; transit_events still populated | PASSED | None needed |
 | TC-06 | Loader CLI: PostgreSQL is not reachable on the given URL | exit code 1 and a one-line 'ERROR:' message, no stack trace | Exit code 1; message: Is the server running on that host and accepting TCP/IP connections? | PASSED | None needed |
 | TC-07 | GET /health with model and database available | status ok, database ok, model_file_found true | status=ok, database=ok, threshold=0.5 | PASSED | None needed |
 | TC-08 | GET /api/transits with no filters | only held-out test-split transits, in pickup-time order | 153 test transits, all split=test, sorted by pickup time | PASSED | None needed |
@@ -45,11 +45,13 @@ Run against a throw-away database (`kq_test`) with a small synthetic dataset and
 | TC-25 | List endpoints with out-of-range or unknown query values | 422 validation error, not a 500 | 422 for limit=0, limit=500, offset=-1, split=banana, corridor=Nowhere, status=weird, alerts status=maybe | PASSED | None needed |
 | TC-25 | List endpoints with out-of-range or unknown query values | 422 validation error, not a 500 | 422 for limit=0, limit=500, offset=-1, split=banana, corridor=Nowhere, status=weird, alerts status=maybe | PASSED | None needed |
 | TC-26 | POST /predict-delay-risk with an out-of-range value, a missing field and an unseen category | 422 each time; a valid body returns a probability | valid body p=0.6801; congestion=7, missing rank, destination=ZZZ all 422 | PASSED | None needed |
-| TC-27 | Model file is missing | scoring returns 503 with an instruction to train the model; /health reports degraded | 503: Model not found at 'C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-1\t | PASSED | None needed |
-| TC-28 | Model file exists but is corrupt | 503 saying the model could not be loaded, not a 500 crash | 503: Model file at 'C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-1\test_c | PASSED | None needed |
+| TC-27 | Model file is missing | scoring returns 503 with an instruction to train the model; /health reports degraded | 503: Model not found at 'C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-2\t | PASSED | None needed |
+| TC-28 | Model file exists but is corrupt | 503 saying the model could not be loaded, not a 500 crash | 503: Model file at 'C:\Users\donel\AppData\Local\Temp\pytest-of-donel\pytest-2\test_c | PASSED | None needed |
 | TC-29 | PostgreSQL is unreachable | data endpoints return 503 'Database unreachable'; /health still answers with status degraded | /api/transits 503; /health 200 with database=unreachable | PASSED | None needed |
 | TC-30 | GET /dashboard and GET / | dashboard HTML is served; root identifies the service | dashboard 200 text/html; root 200 | PASSED | None needed |
 | TC-31 | One transit has a destination the model never saw | that transit is listed in 'failed' with a reason, the others in the batch still score | failed=[1391] with reason 'Unseen value for 'destination': 'ZZZ''; scored=2 | PASSED | None needed |
 | TC-32 | GET /api/options (feeds the form dropdowns) | returns exactly the categories in the model's encoders for all 5 categorical fields | 5 fields returned; corridor=6, rank=4, base_location=3, vehicle_type=4, destination=10 | PASSED | None needed |
 | TC-33 | Every value offered in the dropdowns is sent to /predict-delay-risk | each is accepted (HTTP 200), none rejected as unseen | 27 option values tested, all HTTP 200 | PASSED | None needed |
 | TC-34 | GET /predict | HTML page is served and contains an input for each of the 14 model fields | Page served; all 14 field names present | PASSED | None needed |
+| TC-35 | GET /static/kq.css and /static/kq.js | the shared stylesheet and status script are served with the right content types and define the KQ tokens | kq.css 200 text/css with KQ tokens; kq.js 200 javascript | PASSED | None needed |
+| TC-36 | GET /dashboard and GET /predict | both pages load the shared stylesheet and script, show the same navigation, a system-status chip and the synthetic-data notice | both pages: stylesheet, script, nav links, status chip and synthetic-data notice present | PASSED | None needed |
