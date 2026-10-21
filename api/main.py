@@ -19,6 +19,7 @@ from typing import List, Literal, Optional
 import psycopg2
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, PositiveInt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -38,6 +39,8 @@ app = FastAPI(
                  "alerts for dispatchers.",
     version="0.2.0",
 )
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 # --------------------------------------------------------------------------

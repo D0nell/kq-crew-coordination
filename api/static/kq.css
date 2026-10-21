@@ -1,0 +1,127 @@
+/* KQ Crew Coordination - shared design system (Sprint III, Stage 2)
+   Brand colours are APPROXIMATIONS of the Kenya Airways identity (deep red/burgundy,
+   navy, gold). They are not taken from an official brand sheet. No official logo is used. */
+:root {
+  /* brand */
+  --kq-red: #9b1c31;          --kq-red-hover: #7f1527;   --kq-red-soft: #f7e6e9;
+  --kq-navy: #101a2b;         --kq-navy-2: #1b2740;      --kq-navy-ink: #e8edf5;  --kq-navy-muted: #9aa8bf;
+  --kq-gold: #c9a227;
+  /* surfaces and text */
+  --bg: #f3f4f6; --surface: #ffffff; --surface-2: #f8f9fb;
+  --ink: #1d232d; --ink-2: #454e5b; --muted: #5f6b7a;
+  --line: #d9dde3; --line-soft: #e9ecf0;
+  --focus: #1f4fd8;
+  --track: #dfe3e8; --fill: #566274;
+  /* risk (always paired with a shape and a word) */
+  --low-ink: #17673a;  --low-bg: #e1f2e7;
+  --med-ink: #6f5000;  --med-bg: #fbf0cf;
+  --high-ink: #944000; --high-bg: #fde5d3;
+  --crit-ink: #a3121f; --crit-bg: #fbdcdf;
+  --ok-ink: #17673a;   --bad-ink: #a3121f;
+  /* type, space, shape */
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --fs-1: 12.5px; --fs-2: 14px; --fs-3: 15px; --fs-4: 18px; --fs-5: 24px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --r-1: 4px; --r-2: 8px;
+  --shadow: 0 1px 2px rgba(16, 26, 43, .06), 0 1px 3px rgba(16, 26, 43, .05);
+  --rail-w: 224px; --topbar-h: 56px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --kq-red: #c43a50; --kq-red-hover: #d4586b; --kq-red-soft: #3a1820;
+    --bg: #0e131b; --surface: #171f2b; --surface-2: #1c2635;
+    --ink: #e8edf3; --ink-2: #b6c0cc; --muted: #93a0af;
+    --line: #2a3546; --line-soft: #222c3a; --focus: #7aa2ff;
+    --track: #2a3546; --fill: #93a0af;
+    --low-ink: #7fd6a0; --low-bg: #16301f; --med-ink: #ecc766; --med-bg: #3a2f10;
+    --high-ink: #f4a56e; --high-bg: #3c2412; --crit-ink: #ff8f98; --crit-bg: #421a1f;
+    --ok-ink: #7fd6a0; --bad-ink: #ff8f98;
+    --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html { color-scheme: light dark; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: var(--fs-3)/1.45 var(--font); font-variant-numeric: tabular-nums; }
+a { color: var(--focus); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---- shell: navigation rail + top bar ---- */
+.app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); min-height: 100vh; }
+.rail { background: var(--kq-navy); color: var(--kq-navy-ink); padding: var(--sp-4) 0; display: flex; flex-direction: column; gap: var(--sp-5); position: sticky; top: 0; height: 100vh; }
+.brand { padding: 0 var(--sp-4); border-bottom: 1px solid rgba(255,255,255,.12); padding-bottom: var(--sp-4); }
+.brand b { display: block; font-size: var(--fs-4); letter-spacing: .01em; }
+.brand b i { font-style: normal; color: var(--kq-gold); }
+.brand span { display: block; margin-top: 2px; font-size: var(--fs-1); color: var(--kq-navy-muted); }
+.rail nav { display: flex; flex-direction: column; gap: 2px; padding: 0 var(--sp-2); }
+.rail nav a { color: var(--kq-navy-ink); text-decoration: none; padding: 10px var(--sp-3); border-radius: var(--r-1); font-size: var(--fs-2); border-left: 3px solid transparent; }
+.rail nav a:hover { background: var(--kq-navy-2); }
+.rail nav a[aria-current="page"] { background: var(--kq-navy-2); font-weight: 650; border-left-color: var(--kq-red); }
+.rail .foot { margin-top: auto; padding: 0 var(--sp-4); font-size: var(--fs-1); color: var(--kq-navy-muted); }
+.content { min-width: 0; display: flex; flex-direction: column; }
+.topbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); min-height: var(--topbar-h); padding: var(--sp-2) var(--sp-5); background: var(--surface); border-bottom: 1px solid var(--line); border-top: 3px solid var(--kq-red); }
+.topbar h1 { font-size: var(--fs-4); font-weight: 650; margin: 0; letter-spacing: -.01em; }
+.topbar .sub { color: var(--muted); font-size: var(--fs-1); flex: 1 1 240px; min-width: 0; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.status svg { width: 10px; height: 10px; fill: currentColor; flex: none; }
+.status.ok { color: var(--ok-ink); } .status.warn { color: var(--med-ink); } .status.down { color: var(--bad-ink); }
+.note { padding: var(--sp-2) var(--sp-5); background: var(--med-bg); color: var(--med-ink); font-size: var(--fs-1); }
+main.page { padding: var(--sp-5); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); align-content: start; min-width: 0; }
+
+/* ---- components ---- */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-2); box-shadow: var(--shadow); min-width: 0; }
+.panel > h2 { font-size: var(--fs-3); font-weight: 650; margin: 0; padding: var(--sp-4) var(--sp-4) 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line-soft); }
+label.f { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; }
+select, input, button { font: inherit; }
+select, input { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-1); padding: 6px 9px; }
+button { cursor: pointer; border-radius: var(--r-1); border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 6px 12px; white-space: nowrap; min-height: 34px; }
+button:hover:not(:disabled) { border-color: var(--ink-2); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--kq-red); color: #fff; border-color: var(--kq-red); font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--kq-red-hover); border-color: var(--kq-red-hover); }
+.spacer { flex: 1; }
+.banner { margin: var(--sp-3) var(--sp-4) 0; padding: 10px var(--sp-3); border-radius: var(--r-1); background: var(--crit-bg); color: var(--crit-ink); font-weight: 600; }
+.banner ul { margin: 6px 0 0; padding-left: 18px; font-weight: 400; }
+.empty { padding: 28px var(--sp-4); color: var(--ink-2); }
+.empty p { margin: 0 0 10px; }
+.who { color: var(--muted); font-size: var(--fs-1); }
+.na { color: var(--muted); }
+
+/* risk tags: colour + shape + word */
+.tag { display: inline-flex; align-items: center; gap: 5px; border-radius: 3px; padding: 1px 7px 1px 6px; font-size: var(--fs-1); font-weight: 650; }
+.tag svg { width: 9px; height: 9px; flex: none; fill: currentColor; }
+.LOW { background: var(--low-bg); color: var(--low-ink); }
+.MEDIUM { background: var(--med-bg); color: var(--med-ink); }
+.HIGH { background: var(--high-bg); color: var(--high-ink); }
+.CRITICAL { background: var(--crit-bg); color: var(--crit-ink); }
+
+/* probability meter with alert-threshold tick */
+.track { position: relative; height: 6px; border-radius: 3px; background: var(--track); }
+.track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--fill); }
+.track i.over { background: var(--crit-ink); }
+.track b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); border-radius: 1px; }
+
+/* summary cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--sp-4); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-2); padding: var(--sp-4); box-shadow: var(--shadow); min-width: 0; }
+.card .n { font-size: var(--fs-5); font-weight: 650; line-height: 1.1; }
+.card .n small { font-size: var(--fs-2); font-weight: 400; color: var(--muted); }
+.card .l { color: var(--muted); font-size: var(--fs-1); margin-top: 4px; }
+.card.accent { border-top: 3px solid var(--kq-red); }
+
+/* ---- responsive ---- */
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) var(--sp-3); }
+  .brand { border: 0; padding: 0; }
+  .brand span, .rail .foot { display: none; }
+  .rail nav { flex-direction: row; padding: 0; }
+  .rail nav a { border-left: 0; border-bottom: 3px solid transparent; border-radius: 0; padding: 8px 10px; }
+  .rail nav a[aria-current="page"] { border-bottom-color: var(--kq-red); }
+  .topbar { padding: var(--sp-2) var(--sp-3); }
+  .note { padding: var(--sp-2) var(--sp-3); }
+  main.page { padding: var(--sp-3); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
