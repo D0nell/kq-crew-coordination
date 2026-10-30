@@ -8,6 +8,8 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 
 from conftest import first_ids
 
+from api.main import app
+
 
 # ------------------------------------------------------------------ expected behaviour
 def test_health_ok(client, actual):
@@ -116,8 +118,9 @@ def test_resolve_alert(client, actual):
     actual(f"alert {a['alert_id']} resolved and gone from open list")
 
 
-def test_resolve_is_idempotent_and_survives_rescore(client, actual):
-    """TC-17 | Resolve the same alert twice, then re-score its transit | both calls 200, original resolved_at kept, dispatcher decision not reopened"""
+def test_resolve_twice_and_rescore_high_risk_reopens_alert(client, q, actual):
+    """TC-17 | Resolve the same alert twice, then re-score its transit | both resolves 200 with the
+    same resolved_at; a still-high-risk transit reopens the model alert on rescore"""
     ids = first_ids(client, 40)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     a = client.get("/api/alerts").json()["items"][0]
@@ -125,9 +128,10 @@ def test_resolve_is_idempotent_and_survives_rescore(client, actual):
     r2 = client.patch(f"/api/alerts/{a['alert_id']}/resolve").json()
     assert r1["resolved_at"] == r2["resolved_at"]
     client.post(f"/api/transits/{a['transit_id']}/score")
-    open_ids = [x["alert_id"] for x in client.get("/api/alerts").json()["items"]]
-    assert a["alert_id"] not in open_ids
-    actual("Second resolve returned same resolved_at; re-score did not reopen the alert")
+    after = q("SELECT resolved, resolved_at FROM alerts WHERE alert_id = %s", (a["alert_id"],))[0]
+    assert after["resolved"] is False
+    assert after["resolved_at"] is None
+    actual("both resolves 200 with same resolved_at; rescore reopened the still-high-risk alert")
 
 
 def test_summary_matches_independent_metrics(client, q, actual):
@@ -341,4 +345,357 @@ def test_pages_share_layout(client, actual):
         for needle in ('href="/static/kq.css"', 'src="/static/kq.js"', 'id="sysStatus"',
                        'href="/dashboard"', 'href="/predict"', "Synthetic data"):
             assert needle in t, (path, needle)
-    actual("both pages: stylesheet, script, nav links, status chip and synthetic-data notice present")
+            actual("both pages: stylesheet, script, nav links, status chip and synthetic-data notice present")
+
+# ------------------------------------------------------------------ authentication
+def test_unauthenticated_access_rejected(client, actual):
+    """No session: dispatcher-only endpoints are rejected before touching the database."""
+    from fastapi.testclient import TestClient
+
+    c = TestClient(app)
+    for path in ("/api/transits", "/api/alerts", "/api/summary", "/api/me"):
+        assert c.get(path).status_code == 401, (path, c.get(path).status_code)
+    assert c.post("/api/transits/99999999/score").status_code == 401
+    assert c.post("/api/transits/score-batch", json={"transit_ids": [1]}).status_code == 401
+    actual("401 for unauthenticated requests to dispatcher-only endpoints")
+
+
+def test_dispatcher_session_grants_access(client, actual):
+    """An authenticated dispatcher session is granted access to dispatcher-only endpoints."""
+    assert client.get("/api/transits").status_code == 200
+    assert client.get("/api/alerts").status_code == 200
+    assert client.post("/api/transits/99999999/score").status_code == 404
+    actual("dispatcher session granted /api/transits 200 and /api/alerts 200")
+
+
+def test_crew_account_denied_dispatcher_access(crew_client, actual):
+    """A CREW account is authenticated but denied dispatcher-only endpoints (403)."""
+    assert crew_client.get("/api/transits").status_code == 403
+    assert crew_client.get("/api/alerts").status_code == 403
+    assert crew_client.get("/api/summary").status_code == 403
+    assert crew_client.post("/api/transits/99999999/score").status_code == 403
+    assert crew_client.post("/api/transits/score-batch", json={"transit_ids": [1]}).status_code == 403
+    actual("403 for authenticated CREW account on dispatcher-only endpoints")
+
+
+# ------------------------------------------------------------------ alert lifecycle
+
+
+def test_high_risk_creates_model_alert(client, q, actual):
+    """TC-40 | A high-risk transit with no existing alert creates a model alert"""
+    ids = first_ids(client, 30)
+    b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
+    high_risk = [r for r in b["results"] if r["alert_raised"]]
+    assert high_risk, "no high-risk transit in batch"
+    tid = high_risk[0]["transit_id"]
+    alerts = q(
+        "SELECT alert_id, transit_id, severity, generated_at, resolved, resolved_at, "
+        "delay_probability, source, model_version FROM alerts "
+        "WHERE transit_id = %s AND source = 'model'",
+        (tid,),
+    )
+    assert len(alerts) == 1, f"expected 1 model alert, got {len(alerts)}"
+    a = alerts[0]
+    assert a["resolved"] is False
+    assert a["resolved_at"] is None
+    assert float(a["delay_probability"]) == pytest.approx(high_risk[0]["delay_probability"])
+    actual(f"created model alert {a['alert_id']} for transit {tid}; resolved={a['resolved']}, resolved_at=None")
+
+
+def test_rescore_high_risk_reopens_already_resolved_model_alert(client, q, actual):
+    """TC-41 | Rescoring a high-risk transit whose model alert is already resolved reopens it and clears resolved_at"""
+    ids = first_ids(client, 30)
+    b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
+    high_risk = [r for r in b["results"] if r["alert_raised"]]
+    assert high_risk, "no high-risk transit in batch"
+    tid = high_risk[0]["transit_id"]
+    before = q(
+        "SELECT alert_id, resolved, resolved_at, generated_at FROM alerts "
+        "WHERE transit_id = %s AND source = 'model'",
+        (tid,),
+    )
+    assert len(before) == 1 and before[0]["resolved"] is False
+    # simulate a dispatcher resolving the live model alert
+    client.patch(f"/api/alerts/{before[0]['alert_id']}/resolve")
+    # the transit is still high-risk, so the alert must reopen
+    b2 = client.post(f"/api/transits/{tid}/score").json()
+    assert b2["delay_probability"] >= 0.5
+    after = q(
+        "SELECT resolved, resolved_at, generated_at, severity, delay_probability, model_version "
+        "FROM alerts WHERE alert_id = %s",
+        (before[0]["alert_id"],),
+    )[0]
+    assert after["resolved"] is False
+    assert after["resolved_at"] is None
+    assert after["generated_at"] >= before[0]["generated_at"]
+    assert float(after["delay_probability"]) == pytest.approx(b2["delay_probability"])
+    actual(f"alert {before[0]['alert_id']} reopened after rescore; resolved_at cleared")
+
+
+def test_rescore_below_threshold_resolves_open_model_alert(client, q, actual, monkeypatch):
+    """TC-42 | A below-threshold rescore resolves the open model alert for that transit"""
+    ids = first_ids(client, 30)
+    b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
+    high_risk = [r for r in b["results"] if r["alert_raised"]]
+    assert high_risk, "no high-risk transit in batch"
+    tid = high_risk[0]["transit_id"]
+    p = float(q("SELECT delay_probability FROM predictions WHERE transit_id = %s", (tid,))[0]["delay_probability"])
+    assert p >= 0.5
+    # raise the threshold above this transit's probability so it no longer triggers
+    monkeypatch.setenv("ALERT_THRESHOLD", str(round(p + 0.01, 4)))
+    b2 = client.post("/api/transits/score-batch", json={"transit_ids": [tid]}).json()
+    assert b2["results"][0]["alert_raised"] is False
+    a = q(
+        "SELECT resolved, resolved_at FROM alerts WHERE alert_id = %s",
+        (q("SELECT alert_id FROM alerts WHERE transit_id = %s AND source = 'model'", (tid,))[0]["alert_id"],),
+    )[0]
+    assert a["resolved"] is True
+    assert a["resolved_at"] is not None
+    actual(f"alert reopened at {tid} resolved after below-threshold rescore")
+
+
+def test_repeated_scoring_creates_no_duplicate_model_alerts(client, q, actual):
+    """TC-43 | Repeated scoring of the same transits creates exactly one model alert per transit"""
+    ids = first_ids(client, 20)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    per_transit = q(
+        "SELECT transit_id, COUNT(*) AS n FROM alerts "
+        "WHERE source = 'model' GROUP BY transit_id"
+    )
+    over = [r for r in per_transit if r["n"] > 1]
+    assert not over, f"transits with >1 model alert: {[r['transit_id'] for r in over]}"
+    actual(f"{len(per_transit)} transits, no duplicate model alerts")
+
+
+def test_non_model_alerts_not_modified(client, q, actual):
+    """TC-44 | Scoring does not modify non-model (historical) alerts"""
+    before = {
+        r["alert_id"]: dict(r)
+        for r in q("SELECT alert_id, transit_id, severity, resolved, resolved_at FROM alerts WHERE source <> 'model'")
+    }
+    assert before, "no non-model alerts in the test dataset"
+    ids = first_ids(client, 20)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    after = {
+        r["alert_id"]: dict(r)
+        for r in q("SELECT alert_id, transit_id, severity, resolved, resolved_at FROM alerts WHERE source <> 'model'")
+    }
+    assert after == before, "non-model alerts were modified by scoring"
+    actual(f"{len(after)} non-model alerts unchanged after scoring")
+
+
+def test_queue_sorts_by_probability_desc(client, q, actual):
+    """TC-XX | GET /api/transits?sort=probability | scored transits ordered by delay_probability DESC, nulls last"""
+    ids = first_ids(client, 60)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    items = client.get("/api/transits", params={"sort": "probability", "limit": 200}).json()["items"]
+    scored = [i for i in items if i.get("delay_probability") is not None]
+    probs = [float(i["delay_probability"]) for i in scored]
+    assert probs == sorted(probs, reverse=True)
+    assert all(i.get("delay_probability") is None for i in items[len(scored):])
+    actual(f"{len(items)} transits: {len(scored)} scored in probability DESC, {len(items) - len(scored)} unscored last")
+
+
+def test_queue_critical_risk_filter(client, q, actual):
+    """TC-XX | GET /api/transits?risk=critical | only scored transits with HIGH/CRITICAL risk"""
+    ids = first_ids(client, 60)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    critical = q("SELECT transit_id FROM predictions WHERE risk_level IN ('HIGH', 'CRITICAL')")
+    items = client.get("/api/transits", params={"risk": "critical", "limit": 200}).json()["items"]
+    assert len(items) == len(critical)
+    assert all(i["risk_level"] in {"HIGH", "CRITICAL"} for i in items)
+    actual(f"risk=critical returned {len(items)} of {len(critical)} critical transits")
+
+
+@pytest.mark.parametrize("url", [
+    "/api/transits?sort=banana",
+    "/api/transits?risk=maybe",
+    "/api/transits?sort=probability&risk=weird",
+])
+def test_queue_bad_sort_and_risk_params_422(client, url, actual):
+    """TC-XX | GET /api/transits with invalid sort/risk values | 422 validation error"""
+    assert client.get(url).status_code == 422
+    actual(f"422 for {url}")
+
+
+# ------------------------------------------------------------------ bulk alert resolution
+
+def test_bulk_resolve_multiple_open_alerts(client, q, actual):
+    """TC-45 | Multiple open model alerts resolve successfully in one batch."""
+    ids = first_ids(client, 30)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    open_alerts = q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id"
+    )
+    assert len(open_alerts) >= 3
+    body = {"alert_ids": [a["alert_id"] for a in open_alerts[:3]]}
+    r = client.post("/api/alerts/bulk-resolve", json=body)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["counts"] == {
+        "total": 3, "resolved": 3, "already_resolved": 0,
+        "not_found": 0, "ineligible": 0, "failed": 0,
+    }
+    assert j["successfully_affected_alert_ids"] == [a["alert_id"] for a in open_alerts[:3]]
+    for a in open_alerts[:3]:
+        row = q("SELECT resolved, resolved_at FROM alerts WHERE alert_id=%s", (a["alert_id"],))[0]
+        assert row["resolved"] is True
+        assert row["resolved_at"] is not None
+    actual(f"resolved {len(open_alerts[:3])} alerts; resolved_at set")
+
+
+def test_bulk_resolve_mixed_outcomes(client, q, actual):
+    """TC-46 | Mixed open, already-resolved, unknown and historical IDs."""
+    ids = first_ids(client, 40)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    open_alerts = q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 6"
+    )
+    assert len(open_alerts) >= 6
+    already = [a["alert_id"] for a in open_alerts[:2]]
+    for aid in already:
+        client.patch(f"/api/alerts/{aid}/resolve")  # pre-resolve individually (existing endpoint)
+    open_alerts = q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 4"
+    )
+    hist = q("SELECT alert_id FROM alerts WHERE source <> 'model' ORDER BY alert_id LIMIT 1")[0]
+    body = {
+        "alert_ids": [a["alert_id"] for a in open_alerts]
+        + already
+        + [hist["alert_id"], 99999999, 100000000],
+    }
+    r = client.post("/api/alerts/bulk-resolve", json=body)
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["counts"] == {
+        "total": len(body["alert_ids"]),
+        "resolved": 4, "already_resolved": 2, "not_found": 2, "ineligible": 1, "failed": 0,
+    }
+    assert set(j["not_found_alert_ids"]) == {99999999, 100000000}
+    assert j["ineligible_alert_ids"] == [hist["alert_id"]]
+    assert set(j["resolved_alert_ids"]) == {a["alert_id"] for a in open_alerts}
+    assert set(j["already_resolved_alert_ids"]) == set(already)
+    actual(f"mixed batch: resolved={j['counts']['resolved']}, "
+           f"already={j['counts']['already_resolved']}, unknown={j['counts']['not_found']}, "
+           f"ineligible={j['counts']['ineligible']}")
+
+
+def test_bulk_resolve_auth(client, crew_client, q, actual):
+    """TC-47 | Dispatcher authorization enforced (unauthenticated, CREW, DISPATCHER)."""
+    ids = first_ids(client, 10)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    open_alerts = [
+        a["alert_id"] for a in q(
+            "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE LIMIT 3"
+        )
+    ]
+    from fastapi.testclient import TestClient
+
+    anon = TestClient(app)
+    r = anon.post("/api/alerts/bulk-resolve", json={"alert_ids": [open_alerts[0]]})
+    assert r.status_code == 401, f"unauthenticated should be 401, got {r.status_code}"
+    r = crew_client.post("/api/alerts/bulk-resolve", json={"alert_ids": [open_alerts[0]]})
+    assert r.status_code == 403, f"CREW should be 403, got {r.status_code}"
+    r = client.post("/api/alerts/bulk-resolve", json={"alert_ids": open_alerts})
+    assert r.status_code == 200, f"dispatcher should be 200, got {r.status_code}"
+    actual("auth cases 401/403/200 as expected")
+
+
+def test_bulk_resolve_repeated_batch_safe(client, q, actual):
+    """TC-48 | Repeating a batch is safe; resolved_at is not overwritten."""
+    ids = first_ids(client, 30)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    open_alerts = q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 3"
+    )
+    assert len(open_alerts) >= 3
+    first = [a["alert_id"] for a in open_alerts]
+    r1 = client.post("/api/alerts/bulk-resolve", json={"alert_ids": first})
+    assert r1.status_code == 200
+    assert r1.json()["counts"]["resolved"] == 3
+    r2 = client.post("/api/alerts/bulk-resolve", json={"alert_ids": first})
+    assert r2.status_code == 200
+    j2 = r2.json()
+    assert j2["counts"] == {
+        "total": 3, "resolved": 0, "already_resolved": 3,
+        "not_found": 0, "ineligible": 0, "failed": 0,
+    }
+    assert j2["already_resolved_alert_ids"] == first
+    ts = {row["alert_id"]: row["resolved_at"] for row in
+          q("SELECT alert_id, resolved_at FROM alerts WHERE alert_id = ANY(%s)", (first,))}
+    rows2 = q("SELECT alert_id, resolved_at FROM alerts WHERE alert_id = ANY(%s)", (first,))
+    for row in rows2:
+        assert row["resolved_at"] == ts[row["alert_id"]], "resolved_at must not change on a repeat"
+    actual("repeat batch: resolved=0, already_resolved=3, resolved_at preserved")
+
+
+def test_bulk_resolve_historical_alerts_unchanged(client, q, actual):
+    """TC-49 | Historical (non-model) alerts are never modified by bulk resolve."""
+    ids = first_ids(client, 30)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    hist = q("SELECT alert_id, resolved, resolved_at FROM alerts WHERE source <> 'model' ORDER BY alert_id LIMIT 3")
+    before = {h["alert_id"]: dict(h) for h in hist}
+    first = [a["alert_id"] for a in q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 3"
+    )]
+    body = {"alert_ids": first + [h["alert_id"] for h in hist]}
+    r = client.post("/api/alerts/bulk-resolve", json=body)
+    assert r.status_code == 200, r.text
+    after = {
+        h["alert_id"]: dict(h)
+        for h in q("SELECT alert_id, resolved, resolved_at FROM alerts WHERE alert_id = ANY(%s)",
+                   ([h["alert_id"] for h in hist],))
+    }
+    assert after == before, "non-model alerts must be untouched"
+    actual(f"{len(before)} historical alerts unchanged")
+
+
+@pytest.mark.parametrize("bad", [
+    {}, {"alert_ids": []}, {"alert_ids": [0]}, {"alert_ids": ["x"]},
+    {"alert_ids": [1, 1]}, {"alert_ids": list(range(1, 502))},
+])
+def test_bulk_resolve_invalid_lists_422(client, bad, actual):
+    """TC-50 | Empty, duplicate, non-positive, non-unique or oversized id lists rejected."""
+    assert client.post("/api/alerts/bulk-resolve", json=bad).status_code == 422
+    actual(f"422 for {bad}")
+
+
+def test_bulk_resolve_db_error_rolls_back(client, q, monkeypatch, actual):
+    """TC-51 | An unexpected database error rolls back the whole batch."""
+    ids = first_ids(client, 20)
+    client.post("/api/transits/score-batch", json={"transit_ids": ids})
+    # resolve one model alert individually so the batch contains an already-resolved row
+    first_open = q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 1"
+    )[0]
+    client.patch(f"/api/alerts/{first_open['alert_id']}/resolve")  # preserves resolved_at
+    already1 = [a["alert_id"] for a in q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=TRUE ORDER BY alert_id LIMIT 1"
+    )]
+    assert already1, "need an already-resolved model alert"
+    open2 = [a["alert_id"] for a in q(
+        "SELECT alert_id FROM alerts WHERE source='model' AND resolved=FALSE ORDER BY alert_id LIMIT 2"
+    )]
+    body = {"alert_ids": open2 + already1}
+    import psycopg2
+    from api.main import fetch_one as _main_fetch_one
+
+    calls = {"n": 0}
+
+    def _boom(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise psycopg2.OperationalError("simulated disk failure")
+        return _main_fetch_one(*args, **kwargs)
+
+    monkeypatch.setattr("api.main.fetch_one", _boom)
+    r = client.post("/api/alerts/bulk-resolve", json=body)
+    assert r.status_code == 503, f"expected 503, got {r.status_code}: {r.text}"
+    assert "simulated disk failure" in r.json()["detail"]
+    # everything rolled back: open alerts untouched, already-resolved untouched
+    left = q("SELECT COUNT(*) AS n FROM alerts WHERE source='model' AND resolved=FALSE AND alert_id = ANY(%s)", (open2,))
+    assert left[0]["n"] == 2, "open alerts must be rolled back"
+    still = q("SELECT COUNT(*) AS n FROM alerts WHERE source='model' AND resolved=TRUE AND alert_id = ANY(%s)", (already1,))
+    assert still[0]["n"] == 1, "already-resolved alert must be rolled back to resolved"
+    actual("503 raised and entire batch rolled back")

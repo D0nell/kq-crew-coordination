@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KQ Crew Coordination — Alerts</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/kq.css">
+  <script src="/static/theme.js"></script>
+  <script>
+    window.$ = (id) => document.getElementById(id);
+    window.state = { offset: 0, limit: 50, threshold: 0.5, items: [], total: 0, _busy: false, _reqSeq: 0, __alerts: null };
+    window.SHAPES = {
+      LOW: '<circle cx="5" cy="5" r="4.5"/>',
+      MEDIUM: '<rect x=".5" y=".5" width="9" height="9"/>',
+      HIGH: '<path d="M5 0 10 5 5 10 0 5z"/>',
+      CRITICAL: '<path d="M5 0 10 10H0z"/>',
+    };
+    window.tag = (lvl) => `<span class="tag ${lvl}"><svg viewBox="0 0 10 10" aria-hidden="true">${SHAPES[lvl]}</svg>${lvl[0] + lvl.slice(1).toLowerCase()}</span>`;
+    window.esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    window.fmtTime = (iso) => new Intl.DateTimeFormat('en-GB', {day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'}).format(new Date(iso));
+  </script>
+  <style>
+    ul.alerts { list-style: none; margin: 0; padding: 0; }
+    ul.alerts li { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; }
+    ul.alerts li:last-child { border-bottom: 0; }
+    ul.alerts li input.alert-check { width: 17px; height: 17px; padding: 0; accent-color: var(--kq-red); cursor: pointer; }
+    .a-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .a-meta { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; }
+    .banner.ok { background: var(--low-bg); color: var(--low-ink); }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: grid; place-items: center; z-index: 50; padding: 16px; }
+    .modal { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-2); padding: 20px 22px; max-width: 420px; width: 100%; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25); }
+    .modal h3 { margin: 0 0 8px; font-size: 16px; }
+    .modal p { margin: 0 0 16px; color: var(--ink-2); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><b>KQ <i>Crew</i> Coordination</b><span>Dispatcher desk</span></div>
+    <nav aria-label="Pages">
+      <a href="/dashboard">Transit queue</a>
+      <a href="/alerts" aria-current="page">Alerts</a>
+      <a href="/predict">What-if prediction</a>
+    </nav>
+    <div class="foot">Capstone prototype. Not an official Kenya Airways system.</div>
+  </aside>
+  <div class="content">
+    <header class="topbar">
+      <h1>Alerts</h1>
+      <span class="sub">Delay-risk alerts for scored transits</span>
+      <span class="status" id="sysStatus" role="status">Checking system</span>
+      <span class="sub" id="updated" role="status" aria-live="polite" hidden></span>
+      <div class="theme-toggle" role="group" aria-label="Theme mode">
+        <span class="sr">Theme</span>
+        <button type="button" id="themeBtn" title="Theme">
+          <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"></svg>
+        </button>
+      </div>
+      <button class="logout-btn" id="logout" type="button">Sign out</button>
+    </header>
+    <main class="page">
+      <section class="panel" aria-labelledby="ah">
+        <h2 id="ah">Alerts</h2>
+        <form class="searchbar" id="searchForm" role="search" autocomplete="off">
+          <label class="sr" for="search">Search alerts by ID</label>
+          <input type="search" id="search" placeholder="Search by transit ID or alert ID" inputmode="search">
+          <button type="submit" class="primary">Search</button>
+          <button type="button" id="searchClear" hidden>Clear</button>
+          <span class="search-note" id="searchNote" role="status" aria-live="polite"></span>
+        </form>
+        <div class="toolbar">
+          <label class="f">
+            <input type="checkbox" id="selectAll"> Select all open
+          </label>
+          <button id="resolveSelected" type="button" disabled>Resolve selected 0</button>
+          <label class="f">Show
+            <select id="astatus">
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </label>
+          <span class="who" id="acount"></span>
+        </div>
+        <div class="banner" id="alertMsg" role="status" aria-live="polite" hidden></div>
+        <ul class="alerts" id="alerts"></ul>
+        <div id="aempty" class="empty" hidden></div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="modal-overlay" id="confirmModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <h3 id="confirmModalTitle">Resolve selected alerts</h3>
+    <p id="confirmModalText">Confirm resolution of the selected alerts?</p>
+    <div class="modal-actions">
+      <button id="confirmCancel" type="button">Cancel</button>
+      <button id="confirmOk" type="button">Resolve</button>
+    </div>
+  </div>
+</div>
+<script src="/static/kq.js"></script>
+<script src="/static/alerts.js"></script>
+<script>
+  // Alerts-page helpers required by alerts.js (mirror the dashboard's shared implementations).
+  window.api = async function (path, opts) {
+    let res;
+    try { res = await fetch(path, opts); }
+    catch (e) { throw new Error('Cannot reach the API. Check that the server is running.'); }
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      window.location.replace('/login');
+      throw new Error("Your session has expired. Please log in again.");
+    }
+    if (!res.ok) {
+      const d = body.detail;
+      throw new Error(typeof d === 'string' ? d : (d && d[0] && d[0].msg) || `Request failed (${res.status})`);
+    }
+    return body;
+  };
+
+  window.showError = function (msg) {
+    const b = $('alertMsg');
+    b.textContent = msg;
+    b.hidden = !msg;
+  };
+
+  let updatedLastTs = null;
+  window.setUpdatedTimestamp = function (ts) {
+    if (updatedLastTs === ts) return;
+    updatedLastTs = ts;
+    $('updated').textContent = ts;
+    $('updated').hidden = false;
+  };
+
+  // The alerts-panel auto-refresh engine (in alerts.js) now starts its initial
+  // fetch and 15-second repeat here — only once all shared globals it reads
+  // (window.api, window.state, window.$, window.showError,
+  // window.setUpdatedTimestamp) are defined above. The redundant top-level
+  // refreshAlerts() call is removed: the engine performs the initial fetch
+  // exactly once, then repeats every REFRESH_MS (15 seconds).
+  document.getElementById('logout').addEventListener('click', async function () {
+    this.disabled = true;
+    try { await fetch('/logout', { method: 'POST' }); } catch (e) { /* leave anyway */ }
+    window.location.replace('/login');
+  });
+  window.__kqAlerts.startAutoRefresh(true);
+
+  window.__kqTheme.initTheme();
+</script>
+</body>
+</html>

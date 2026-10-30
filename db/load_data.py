@@ -45,7 +45,7 @@ def table_exists(cur, name):
 
 
 def run_sql_file(cur, path):
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8-sig") as f:
         cur.execute(f.read())
 
 

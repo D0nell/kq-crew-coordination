@@ -17,16 +17,21 @@ import sys
 from typing import List, Literal, Optional
 
 import psycopg2
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, PositiveInt
+from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ml.preprocessing.load_data import CATEGORICAL_COLS, encode_new_record  # noqa: E402
 
 from . import scoring  # noqa: E402
-from .config import get_alert_threshold, get_model_path  # noqa: E402
+from .config import (  # noqa: E402
+    get_alert_threshold, get_model_path,
+    get_session_secret, session_https_only,
+)
+from .auth import authenticate_user, get_current_user, require_dispatcher  # noqa: E402
 from .db import fetch_all, fetch_one, get_conn  # noqa: E402
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -38,6 +43,15 @@ app = FastAPI(
     description="Scores crew transits for delay risk, stores the scores, and raises "
                  "alerts for dispatchers.",
     version="0.2.0",
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=get_session_secret(),
+    session_cookie="kq_session",
+    max_age=60 * 60 * 8,
+    same_site="lax",
+    https_only=session_https_only(),
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -61,6 +75,11 @@ async def db_unreachable_handler(request: Request, exc: psycopg2.OperationalErro
 # --------------------------------------------------------------------------
 # Schemas
 # --------------------------------------------------------------------------
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=160)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
 class TransitRequest(BaseModel):
     """Raw inputs for one transit — the API encodes categoricals internally."""
     is_weekday: int = Field(..., ge=0, le=1)
@@ -98,17 +117,74 @@ def root():
             "dashboard": "/dashboard", "docs": "/docs"}
 
 
+@app.get("/login", include_in_schema=False)
+def login_page(request: Request):
+    try:
+        user = get_current_user(request)
+        destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
+        return RedirectResponse(destination, status_code=303)
+    except HTTPException:
+        return FileResponse(os.path.join(STATIC_DIR, "login.html"), media_type="text/html")
+
+
+@app.post("/login")
+def login(body: LoginRequest, request: Request):
+    user = authenticate_user(body.email, body.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    request.session.clear()
+    request.session["user_id"] = user["user_id"]
+    destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
+    return {"ok": True, "role": user["role"], "redirect": destination}
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/me")
+def current_account(user: dict = Depends(get_current_user)):
+    """Return the identity of the authenticated account."""
+    return {
+        "user_id": user["user_id"],
+        "full_name": user["full_name"],
+        "role": user["role"],
+        "email": user["email"],
+    }
+
+
 @app.get("/dashboard", include_in_schema=False)
-def dashboard():
+def dashboard(request: Request):
+    try:
+        user = get_current_user(request)
+    except HTTPException:
+        return RedirectResponse("/login", status_code=303)
+    if user["role"] != "DISPATCHER":
+        return RedirectResponse("/predict", status_code=303)
     return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"), media_type="text/html")
 
 
 @app.get("/predict", include_in_schema=False)
-def predict_page():
+def predict_page(request: Request):
+    try:
+        get_current_user(request)
+    except HTTPException:
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(os.path.join(STATIC_DIR, "predict.html"), media_type="text/html")
 
 
-@app.get("/api/options")
+@app.get("/alerts", include_in_schema=False)
+def alerts_page(request: Request):
+    try:
+        get_current_user(request)
+    except HTTPException:
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(os.path.join(STATIC_DIR, "alerts.html"), media_type="text/html")
+
+
+@app.get("/api/options", dependencies=[Depends(get_current_user)])
 def options():
     """
     The exact category values the model was trained on, read from its encoders, so the
@@ -134,7 +210,7 @@ def health():
     return info
 
 
-@app.post("/predict-delay-risk", response_model=PredictionResponse)
+@app.post("/predict-delay-risk", response_model=PredictionResponse, dependencies=[Depends(get_current_user)])
 def predict_delay_risk(request: TransitRequest):
     """Stateless scoring of a transit described in the request body (no database)."""
     bundle = scoring.load_bundle()
@@ -167,23 +243,36 @@ LEFT JOIN predictions p ON p.transit_id = t.transit_id
 """
 
 
-@app.get("/api/transits")
+@app.get("/api/transits", dependencies=[Depends(require_dispatcher)])
 def list_transits(
     split: Literal["train", "val", "test"] = "test",
     corridor: Optional[Literal[tuple(CORRIDORS)]] = None,  # type: ignore[valid-type]
     status: Literal["all", "scored", "unscored", "alert"] = "all",
+    risk: Literal["all", "critical"] = "all",
+    sort: Literal["pickup_time", "probability"] = "pickup_time",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None, max_length=20),
 ):
     """
     Transits for the dispatcher. Defaults to the held-out TEST split so a live demo
     never scores data the model was trained on. 'actual_*' fields are the recorded
     outcome, shown for replay evaluation only.
+
+    risk=critical keeps only scored transits whose model risk is HIGH or CRITICAL.
+    sort=probability orders by delay_probability DESC (unscored/NULL last); the
+    default sort=pickup_time preserves prior behaviour.
     """
     where, params = ["t.split = %(split)s"], {"split": split, "limit": limit, "offset": offset}
     if corridor:
         where.append("t.corridor = %(corridor)s")
         params["corridor"] = corridor
+    if q and q.strip():
+        term = q.strip().lstrip("#")
+        if not term.isdigit():
+            return {"total": 0, "limit": limit, "offset": offset, "items": []}
+        where.append("t.transit_id = %(q)s")
+        params["q"] = int(term)
     if status == "scored":
         where.append("p.transit_id IS NOT NULL")
     elif status == "unscored":
@@ -191,16 +280,23 @@ def list_transits(
     elif status == "alert":
         where.append("""EXISTS (SELECT 1 FROM alerts a WHERE a.transit_id = t.transit_id
                          AND a.source = 'model' AND a.resolved = FALSE)""")
+    if risk == "critical":
+        where.append("p.risk_level IN ('HIGH', 'CRITICAL')")
     clause = " WHERE " + " AND ".join(where)
+    if sort == "probability":
+        order_by = ("(p.delay_probability IS NULL) ASC, p.delay_probability DESC, "
+                    "t.scheduled_pickup_time, t.transit_id")
+    else:
+        order_by = "t.scheduled_pickup_time, t.transit_id"
     with get_conn() as conn:
         total = fetch_one(conn, "SELECT COUNT(*) AS n FROM transit_events t "
                                 "LEFT JOIN predictions p ON p.transit_id = t.transit_id" + clause, params)["n"]
         items = fetch_all(conn, TRANSIT_SELECT + clause +
-                          " ORDER BY t.scheduled_pickup_time, t.transit_id LIMIT %(limit)s OFFSET %(offset)s", params)
+                          " ORDER BY " + order_by + " LIMIT %(limit)s OFFSET %(offset)s", params)
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
-@app.post("/api/transits/score-batch")
+@app.post("/api/transits/score-batch", dependencies=[Depends(require_dispatcher)])
 def score_batch(body: BatchScoreRequest):
     """Scores up to 200 transits. Unknown ids are reported, not fatal."""
     with get_conn() as conn:
@@ -210,7 +306,7 @@ def score_batch(body: BatchScoreRequest):
     return out
 
 
-@app.post("/api/transits/{transit_id}/score")
+@app.post("/api/transits/{transit_id}/score", dependencies=[Depends(require_dispatcher)])
 def score_one(transit_id: PositiveInt):
     with get_conn() as conn:
         out = scoring.score_transits(conn, [transit_id])
@@ -221,7 +317,7 @@ def score_one(transit_id: PositiveInt):
     return out["results"][0]
 
 
-@app.get("/api/alerts")
+@app.get("/api/alerts", dependencies=[Depends(require_dispatcher)])
 def list_alerts(status: Literal["open", "resolved", "all"] = "open",
                 limit: int = Query(100, ge=1, le=500)):
     where = {"open": "AND a.resolved = FALSE", "resolved": "AND a.resolved = TRUE", "all": ""}[status]
@@ -241,7 +337,7 @@ def list_alerts(status: Literal["open", "resolved", "all"] = "open",
     return {"count": len(items), "items": items}
 
 
-@app.patch("/api/alerts/{alert_id}/resolve")
+@app.patch("/api/alerts/{alert_id}/resolve", dependencies=[Depends(require_dispatcher)])
 def resolve_alert(alert_id: PositiveInt):
     """Marks a model alert as resolved. Resolving twice is harmless."""
     with get_conn() as conn:
@@ -254,7 +350,108 @@ def resolve_alert(alert_id: PositiveInt):
     return row
 
 
-@app.get("/api/summary")
+class BulkResolveRequest(BaseModel):
+    """Body for POST /api/alerts/bulk-resolve.
+
+    A non-empty, bounded, unique list of positive model alert ids. Validation is
+    defensive: the server trusts neither the client's view of which alerts are
+    open, nor that the ids even exist.
+    """
+
+    alert_ids: List[PositiveInt] = Field(
+        ..., min_length=1, max_length=500, description="Unique model alert ids to resolve."
+    )
+
+    @field_validator("alert_ids")
+    @classmethod
+    def _unique_ids(cls, v: List[int]) -> List[int]:
+        if len(set(v)) != len(v):
+            raise ValueError("alert_ids must be unique")
+        return v
+
+
+@app.post("/api/alerts/bulk-resolve", dependencies=[Depends(require_dispatcher)])
+def bulk_resolve(body: BulkResolveRequest):
+    """Mark several model alerts resolved in one request (one transaction).
+
+    Each alert_id is re-validated against the database, so the client's selection
+    is never trusted:
+
+      * an open model alert is marked resolved. resolved_at is set only where a
+        row is newly resolved; already-resolved rows are left untouched;
+      * an already-resolved model alert is confirmed without touching
+        resolved_at;
+      * an unknown id is reported as not_found;
+      * a row that exists but is not a model alert (e.g. historical) is reported
+        as ineligible and never modified.
+
+    Expected per-id outcomes are always returned, so an already-resolved or
+    unknown id never aborts the batch. An unexpected database error rolls the
+    whole batch back (get_conn rolls back on exception).
+    """
+    alert_ids = sorted(set(body.alert_ids))
+    resolved, already_resolved, not_found, ineligible, failed = [], [], [], [], []
+
+    with get_conn() as conn:
+        for alert_id in alert_ids:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE alerts
+                           SET resolved = TRUE, resolved_at = NOW()
+                           WHERE alert_id = %s AND source = 'model' AND resolved = FALSE
+                           RETURNING alert_id""",
+                        (alert_id,),
+                    )
+                    if cur.fetchone():
+                        resolved.append(alert_id)
+                        continue
+
+                # No row was updated. Classify against authoritative state, which is
+                # the only place that decides whether this id is ours to touch.
+                row = fetch_one(
+                    conn,
+                    "SELECT source, resolved FROM alerts WHERE alert_id = %s",
+                    (alert_id,),
+                )
+                if row is None:
+                    not_found.append(alert_id)
+                elif row["source"] != "model":
+                    ineligible.append(alert_id)
+                elif row["resolved"]:
+                    already_resolved.append(alert_id)
+                else:
+                    # An open model alert that the conditional UPDATE did not match:
+                    # inconsistent state on a single connection. Surface it instead of
+                    # guessing.
+                    failed.append(alert_id)
+            except Exception as exc:  # pragma: no cover - unexpected DB error
+                failed.append(alert_id)
+                # get_conn rolls back the whole batch when this propagates.
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"bulk resolve failed for alert {alert_id}: {exc}",
+                ) from exc
+
+    return {
+        "counts": {
+            "total": len(alert_ids),
+            "resolved": len(resolved),
+            "already_resolved": len(already_resolved),
+            "not_found": len(not_found),
+            "ineligible": len(ineligible),
+            "failed": len(failed),
+        },
+        "resolved_alert_ids": resolved,
+        "already_resolved_alert_ids": already_resolved,
+        "not_found_alert_ids": not_found,
+        "ineligible_alert_ids": ineligible,
+        "failed_alert_ids": failed,
+        "successfully_affected_alert_ids": resolved + already_resolved,
+    }
+
+
+@app.get("/api/summary", dependencies=[Depends(require_dispatcher)])
 def summary():
     """
     Dashboard totals plus replay evaluation: of the held-out TEST transits that have

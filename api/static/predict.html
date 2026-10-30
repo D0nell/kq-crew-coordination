@@ -41,6 +41,7 @@
   <div class="brand"><b>KQ <i>Crew</i> Coordination</b><span>Dispatcher desk</span></div>
   <nav aria-label="Pages">
     <a href="/dashboard">Transit queue</a>
+    <a href="/alerts">Alerts</a>
     <a href="/predict" aria-current="page">What-if prediction</a>
   </nav>
   <div class="foot">Capstone prototype. Not an official Kenya Airways system.</div>
@@ -50,6 +51,13 @@
   <h1>What-if prediction</h1>
   <span class="sub">Predict whether a crew transit to JKIA will run 20+ minutes late</span>
   <span class="status" id="sysStatus" role="status">Checking system</span>
+  <div class="theme-toggle" role="group" aria-label="Theme mode">
+    <span class="sr">Theme</span>
+    <button type="button" id="themeBtn" title="Theme">
+      <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"></svg>
+    </button>
+  </div>
+  <button class="logout-btn" id="logout" type="button">Sign out</button>
 </header>
 <div class="note">Synthetic data and a model trained on it. Results show the pipeline works; they are not an operational forecast.</div>
 
@@ -122,6 +130,7 @@
 </div>
 
 <script src="/static/kq.js"></script>
+<script src="/static/theme.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const CATS = ['corridor', 'rank', 'base_location', 'vehicle_type', 'destination'];
@@ -137,11 +146,25 @@ const ICON = {
   MEDIUM: '<svg viewBox="0 0 10 10" aria-hidden="true"><rect x=".5" y=".5" width="9" height="9"/></svg>',
   HIGH: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .3 9.7 5 5 9.7.3 5z"/></svg>',
   CRITICAL: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .5 9.7 9.5H.3z"/></svg>' };
+const CAPACITY_BY_VEHICLE = { 'Crew Van': 8, 'Shuttle Bus': 20, 'Saloon Car': 4, 'Minibus': 14 };
+const CORRIDOR_BASE_KM = {
+  'Mombasa Rd - JKIA': 14.5, 'Westlands - JKIA': 24.0, 'Embakasi - JKIA': 6.0,
+  'KQ Training Centre - JKIA': 4.2, 'Medical Centre - JKIA': 9.8, 'South B - JKIA': 8.5
+};
 const EXAMPLE = { is_weekday: 1, is_rush_hour: 1, weather_flag: 0, traffic_congestion_index: 0.8,
-  historical_avg_delay_min: 25, distance_km: 18.5, hour_of_day: 8, day_of_week: 1, capacity: 14,
+  historical_avg_delay_min: 23.1, distance_km: 18.5, hour_of_day: 8, day_of_week: 1, capacity: 8,
   corridor: 'Mombasa Rd - JKIA', rank: 'Captain', base_location: 'JKIA Base', vehicle_type: 'Crew Van', destination: 'LHR' };
 const RESULT_EMPTY = $('result').innerHTML;
 let threshold = 0.5;
+
+function isRushHour(hour) {
+  return [6, 7, 8, 9, 16, 17, 18, 19].includes(hour) ? 1 : 0;
+}
+
+function corridorHistoricalDelayMin(corridor, isRushHour) {
+  const baseKm = CORRIDOR_BASE_KM[corridor] ?? 0;
+  return baseKm * 0.9 + (isRushHour ? 10 : 2);
+}
 
 function esc(s) { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
 
@@ -259,8 +282,57 @@ $('f').addEventListener('submit', async (ev) => {
 });
 
 $('example').onclick = () => { clearErrors(); FIELDS.forEach(k => $(k).value = EXAMPLE[k]); };
-$("clear").onclick = () => { clearErrors(); $('f').reset(); $('result').innerHTML = RESULT_EMPTY; };
+$('clear').onclick = () => { clearErrors(); $('f').reset(); $('result').innerHTML = RESULT_EMPTY; };
+
+// ---- intelligent defaults (auto-populate from verified configuration) ----
+// Vehicle capacity is a verified per-type value from the fleet dataset.
+$('vehicle_type').addEventListener('change', () => {
+  const capacity = CAPACITY_BY_VEHICLE[$('vehicle_type').value];
+  if (capacity) $('capacity').value = capacity;
+});
+
+// Weekday slot is derived from the selected day of week using the training-data
+// rule: day_of_week 0-4 (Mon-Fri) => is_weekday = 1; 5-6 (Sat-Sun) => 0.
+$('day_of_week').addEventListener('change', () => {
+  const day = parseInt($('day_of_week').value, 10);
+  $('is_weekday').value = (day >= 0 && day <= 4) ? 1 : 0;
+});
+
+// Rush hour is derived from the predicted hour of day using the dataset definition:
+// is_rush_hour = 1 when hour is in {6,7,8,9,16,17,18,19}, else 0.
+$('hour_of_day').addEventListener('change', () => {
+  const hour = parseInt($('hour_of_day').value, 10);
+  $('is_rush_hour').value = isRushHour(hour);
+});
+
+// Distance (km) defaults to the verified corridor base distance.
+// This is the default corridor distance, NOT a guaranteed actual route distance.
+// The user may override it.
+$('corridor').addEventListener('change', () => {
+  const corridor = $('corridor').value;
+  const baseKm = CORRIDOR_BASE_KM[corridor];
+  if (baseKm !== undefined) {
+    $('distance_km').value = baseKm.toFixed(1);
+  }
+});
+
+// historical_avg_delay_min defaults to the corridor's existing estimate:
+// corridor.base_km * 0.9 + (10 if rush hour else 2). This is an estimate of
+// typical pre-trip delay, not measured live performance.
+$('corridor').addEventListener('change', () => {
+  const corridor = $('corridor').value;
+  const isRushHour = parseInt($('is_rush_hour').value, 10);
+  const estimate = corridorHistoricalDelayMin(corridor, isRushHour);
+  $('historical_avg_delay_min').value = estimate.toFixed(1);
+});
+
 loadOptions();
+document.getElementById('logout').addEventListener('click', async function () {
+  this.disabled = true;
+  try { await fetch('/logout', { method: 'POST' }); } catch (e) { /* leave anyway */ }
+  window.location.replace('/login');
+});
+window.__kqTheme.initTheme();
 </script>
 </body>
 </html>
