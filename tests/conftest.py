@@ -203,7 +203,101 @@ def q(test_db_url):
 @pytest.fixture
 def client(loaded_db):
     from api.main import app
-    return TestClient(app)
+    from api.auth import hash_password
+    from api.db import get_conn
+
+    test_email = "test.dispatcher@example.com"
+    test_password = "TestDispatcher-Only-For-Tests-123!"
+
+    # Create or reset a dispatcher account in the disposable test database.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (full_name, role, email, password_hash)
+                VALUES (%s, 'DISPATCHER', %s, %s)
+                ON CONFLICT (email)
+                DO UPDATE SET
+                    role = 'DISPATCHER',
+                    password_hash = EXCLUDED.password_hash
+                """,
+                (
+                    "Test Dispatcher",
+                    test_email,
+                    hash_password(test_password),
+                ),
+            )
+
+    test_client = TestClient(app)
+    response = test_client.post(
+        "/login",
+        json={
+            "email": test_email,
+            "password": test_password,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    yield test_client
+
+    # Teardown: remove the test account so auth fixtures never contaminate
+    # loader row-count tests (e.g. test_row_counts_match_csv), regardless of
+    # which test file runs first.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE email = %s", (test_email,))
+
+    return test_client
+
+
+@pytest.fixture
+def crew_client(loaded_db):
+    from api.main import app
+    from api.auth import hash_password
+    from api.db import get_conn
+
+    test_email = "test.crew@example.com"
+    test_password = "TestCrew-Only-For-Tests-123!"
+
+    # Create or reset a crew account in the disposable test database only.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (full_name, role, email, password_hash)
+                VALUES (%s, 'CREW', %s, %s)
+                ON CONFLICT (email)
+                DO UPDATE SET
+                    role = 'CREW',
+                    password_hash = EXCLUDED.password_hash
+                """,
+                (
+                    "Test Crew Member",
+                    test_email,
+                    hash_password(test_password),
+                ),
+            )
+
+    test_client = TestClient(app)
+    response = test_client.post(
+        "/login",
+        json={
+            "email": test_email,
+            "password": test_password,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    yield test_client
+
+    # Teardown: remove the test account so auth fixtures never contaminate
+    # loader row-count tests (e.g. test_row_counts_match_csv), regardless of
+    # which test file runs first.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE email = %s", (test_email,))
+
+    return test_client
 
 
 def first_ids(client, n=100):

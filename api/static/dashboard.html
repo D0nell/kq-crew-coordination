@@ -7,8 +7,6 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/kq.css">
 <style>
-  .split { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--sp-5); align-items: start; }
-  @media (max-width: 1360px) { .split { grid-template-columns: minmax(0, 1fr); } }
   .scroll { overflow-x: auto; position: relative; }
   .scroll table { min-width: 680px; }
   table { width: 100%; border-collapse: collapse; }
@@ -27,13 +25,11 @@
   .match { font-size: 12.5px; font-weight: 600; }
   .match.ok { color: var(--ok-ink); } .match.bad { color: var(--bad-ink); }
   .pager { display: flex; align-items: center; gap: 10px; padding: 12px 16px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
-  ul.alerts { list-style: none; margin: 0; padding: 0; }
-  ul.alerts li { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
-  ul.alerts li:last-child { border-bottom: 0; }
-  .a-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .a-meta { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; }
   .card.replay .n { font-size: 20px; }
   .card.replay .n small { margin-left: 2px; }
+.theme-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.theme-toggle button { min-height: 32px; }
+
 </style>
 </head>
 <body>
@@ -41,25 +37,48 @@
 <aside class="rail">
   <div class="brand"><b>KQ <i>Crew</i> Coordination</b><span>Dispatcher desk</span></div>
   <nav aria-label="Pages">
-    <a href="/dashboard" aria-current="page">Transit queue</a>
-    <a href="/predict">What-if prediction</a>
-  </nav>
+      <a href="/dashboard" aria-current="page">Transit queue</a>
+      <a href="/alerts">Alerts</a>
+      <a href="/predict">What-if prediction</a>
+    </nav>
   <div class="foot">Capstone prototype. Not an official Kenya Airways system.</div>
 </aside>
 <div class="content">
 <header class="topbar">
   <h1>Crew transit risk</h1>
   <span class="sub" id="sub">Dispatcher desk</span>
+  <span class="who" id="updated" role="status" aria-live="polite" hidden></span>
   <span class="status" id="sysStatus" role="status">Checking system</span>
+  <div class="theme-toggle" role="group" aria-label="Theme mode">
+    <span class="sr">Theme</span>
+    <button type="button" id="themeBtn" title="Theme">
+      <svg class="icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"></svg>
+    </button>
+  </div>
+  <span class="who" id="currentUser"></span>
+  <button class="logout-btn" id="logout" type="button">Sign out</button>
 </header>
-<div class="note">Synthetic data. This view replays held-out test transits, so the recorded outcome can be compared with the model's prediction.</div>
+<div class="note" id="evalNote">Synthetic data. This view replays held-out test transits, so the recorded outcome can be compared with the model's prediction.</div>
 
 <main class="page">
   <div class="cards" id="figures" aria-live="polite"></div>
-  <div class="split">
   <section class="panel" aria-labelledby="qh">
     <h2 id="qh">Transit queue</h2>
+    <form class="searchbar" id="searchForm" role="search" autocomplete="off">
+      <label class="sr" for="search">Search transits by ID</label>
+      <input type="search" id="search" placeholder="Search by transit ID, e.g. 4521" inputmode="search">
+      <button type="submit" class="primary">Search</button>
+      <button type="button" id="searchClear" hidden>Clear</button>
+      <span class="search-note" id="searchNote" role="status" aria-live="polite"></span>
+    </form>
     <div class="toolbar">
+      <div class="chips" id="views" role="group" aria-label="Quick view">
+        <button type="button" class="chip" data-view="all" aria-pressed="true">All transits</button>
+        <button type="button" class="chip" data-view="critical" aria-pressed="false">High &amp; critical</button>
+        <button type="button" class="chip" data-view="unscored" aria-pressed="false">Not scored</button>
+      </div>
+      <button type="button" class="filters-btn" id="filtersBtn" aria-expanded="false" aria-controls="moreFilters">Filters</button>
+      <div class="more" id="moreFilters">
       <label class="f">Corridor
         <select id="corridor">
           <option value="">All corridors</option>
@@ -67,17 +86,19 @@
           <option>KQ Training Centre - JKIA</option><option>Medical Centre - JKIA</option><option>South B - JKIA</option>
         </select>
       </label>
-      <label class="f">Show
-        <select id="status">
-          <option value="all">All</option><option value="unscored">Not scored yet</option>
-          <option value="scored">Scored</option><option value="alert">With open alert</option>
+      <label class="f">Sort
+        <select id="sort">
+          <option value="probability">Highest risk first</option>
+          <option value="pickup_time">Pickup time</option>
         </select>
       </label>
       <label class="f"><input type="checkbox" id="outcome"> Show recorded outcome</label>
+      </div>
       <span class="spacer"></span>
-      <button class="primary" id="scoreAll">Score these transits</button>
+      <button class="primary" id="scoreAll">Score unscored</button>
     </div>
     <div class="banner" id="error" role="alert" hidden></div>
+    <div class="banner" id="scoreResult" role="status" aria-live="polite" hidden></div>
     <div class="scroll"><table id="tbl" aria-busy="false">
       <caption id="cap"></caption>
       <thead><tr>
@@ -93,23 +114,12 @@
     </div>
   </section>
 
-  <section class="panel" aria-labelledby="ah">
-    <h2 id="ah">Alerts</h2>
-    <div class="toolbar">
-      <label class="f">Show
-        <select id="astatus"><option value="open">Open</option><option value="resolved">Resolved</option></select>
-      </label>
-      <span class="who" id="acount"></span>
-    </div>
-    <ul class="alerts" id="alerts"></ul>
-    <div id="aempty" class="empty" hidden></div>
-  </section>
-  </div>
 </main>
 </div>
 </div>
 
 <script src="/static/kq.js"></script>
+<script src="/static/theme.js"></script>
 <script>
 const SHAPES = {
   LOW: '<circle cx="5" cy="5" r="4.5"/>',
@@ -118,7 +128,15 @@ const SHAPES = {
   CRITICAL: '<path d="M5 0 10 10H0z"/>',
 };
 const $ = (id) => document.getElementById(id);
-const state = { offset: 0, limit: 50, threshold: 0.5, items: [], total: 0 };
+let updatedLastTs = null;
+// Evaluation-only details (model name, recorded outcomes, replay note) are hidden from the
+// dispatcher view. Add ?eval=1 to the address to show them, e.g. for the demo.
+const EVAL = new URLSearchParams(location.search).has('eval');
+if (!EVAL) {
+  document.getElementById('evalNote').remove();
+  document.getElementById('outcome').closest('label').style.display = 'none';
+}
+const state = { offset: 0, limit: 50, threshold: 0.5, items: [], total: 0, _busy: false, _reqSeq: 0, _rendered: false, search: '', view: 'all', critical: 0, unscored: 0 };
 
 const fmtTime = (iso) => new Intl.DateTimeFormat('en-GB', {
   day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
@@ -130,6 +148,10 @@ async function api(path, opts) {
   try { res = await fetch(path, opts); }
   catch (e) { throw new Error('Cannot reach the API. Check that the server is running.'); }
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    window.location.replace("/login");
+    throw new Error("Your session has expired. Please log in again.");
+  }
   if (!res.ok) {
     const d = body.detail;
     throw new Error(typeof d === 'string' ? d : (d && d[0] && d[0].msg) || `Request failed (${res.status})`);
@@ -140,23 +162,31 @@ function showError(msg) { const b = $('error'); b.textContent = msg; b.hidden = 
 
 function renderFigures(s) {
   state.threshold = s.alert_threshold;
-  $('sub').textContent = `Model ${s.model_version}. Alerts raise at probability ${s.alert_threshold.toFixed(2)} or higher.`;
-  const r = s.replay, f = (v) => (v == null ? '<span class="na">–</span>' : v.toFixed(2));
+  $('sub').textContent = EVAL ? `Model ${s.model_version}. Alerts raise at probability ${s.alert_threshold.toFixed(2)} or higher.` : 'Delay risk for upcoming crew transits';
+  const unscored = state.unscored;
   $('figures').innerHTML = `
-    <div class="card accent"><div class="n">${s.scored}<small> of ${s.test_transits}</small></div><div class="l">test transits scored</div></div>
-    <div class="card accent"><div class="n">${s.open_alerts}</div><div class="l">open alerts</div></div>
-    <div class="card replay" title="Predictions compared with the recorded outcome, on held-out test transits that have been scored">
-      <div class="n">${f(r.precision)}<small>precision</small> &nbsp;${f(r.recall)}<small>recall</small> &nbsp;${f(r.f1)}<small>F1</small></div>
-      <div class="l">${r.scored_test_transits ? `replay accuracy on ${r.scored_test_transits} scored transits` : 'score some transits to see replay accuracy'}</div>
-    </div>`;
+    <button type="button" class="card accent as-btn ${state.view === 'critical' ? 'on' : ''}" data-view="critical"><div class="n">${state.critical}</div><div class="l">high or critical risk</div></button>
+    <a class="card as-btn" href="/alerts"><div class="n">${s.open_alerts}</div><div class="l">open alerts &middot; view</div></a>
+    <button type="button" class="card as-btn ${state.view === 'unscored' ? 'on' : ''}" data-view="unscored"><div class="n">${unscored}<small> of ${s.test_transits}</small></div><div class="l">not scored yet</div></button>`;
+}
+
+function setView(v) {
+  state.view = v; state.offset = 0;
+  document.querySelectorAll('#views .chip').forEach((c) => c.setAttribute('aria-pressed', String(c.dataset.view === v)));
+}
+
+function updateScoreAll() {
+  const n = state.items.filter((t) => t.delay_probability == null).length;
+  $('scoreAll').disabled = n === 0;
+  $('scoreAll').textContent = n ? `Score ${n} unscored` : 'Score unscored';
 }
 
 function meter(p) {
   if (p == null) return '<span class="na">Not scored</span>';
   const over = p >= state.threshold;
-  return `<div class="meter"><div class="track" role="img" aria-label="Probability ${p.toFixed(2)}, alert at ${state.threshold.toFixed(2)}">
+  return `<div class="meter"><div class="track" role="img" aria-label="Delay probability ${Math.round(p * 100)} percent, alert at ${Math.round(state.threshold * 100)} percent">
     <i class="${over ? 'over' : ''}" style="width:${(p * 100).toFixed(1)}%"></i><b style="left:${(state.threshold * 100).toFixed(1)}%"></b></div>
-    <span class="p">${p.toFixed(2)}</span></div>`;
+    <span class="p">${Math.round(p * 100)}%</span></div>`;
 }
 function outcomeCell(t) {
   const actual = ['HIGH', 'CRITICAL'].includes(t.actual_risk_class);
@@ -166,82 +196,196 @@ function outcomeCell(t) {
   return `${base} <span class="match ${hit ? 'ok' : 'bad'}">${hit ? 'Match' : 'Miss'}</span>`;
 }
 
+// Pickup shown as time first (what a dispatcher scans for), then weekday and full date.
+const pickupCell = (iso) => {
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(String(iso));
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  return `<div class="t">${time}</div><div class="who">${day}</div>`;
+};
+
 function renderRows() {
   const showOut = $('outcome').checked;
   document.querySelectorAll('.outcome-col').forEach((el) => (el.hidden = !showOut));
   $('rows').innerHTML = state.items.map((t) => `
     <tr class="${t.open_alert ? 'has-alert' : ''}">
-      <td class="when">${fmtTime(t.scheduled_pickup_time)}</td>
-      <td><div class="route">${esc(t.corridor)}</div>
+      <td class="when">${pickupCell(t.scheduled_pickup_time)}</td>
+      <td><div class="route">${esc(t.corridor)}${t.open_alert ? '<span class="alert-tag">Alert</span>' : ''}</div>
           <div class="who">#${t.transit_id} · ${esc(t.rank)} · ${esc(t.vehicle_type)} · to ${esc(t.destination)}</div></td>
       <td class="num">${t.risk_level ? tag(t.risk_level) : '<span class="na">–</span>'}</td>
       <td class="num">${meter(t.delay_probability)}</td>
       ${showOut ? `<td>${outcomeCell(t)}</td>` : ''}
-      <td><button data-score="${t.transit_id}" aria-label="${t.delay_probability == null ? 'Score' : 'Re-score'} transit ${t.transit_id}">${t.delay_probability == null ? 'Score' : 'Re-score'}</button></td>
+      <td><button class="row-act ${t.delay_probability == null ? 'primary' : 'ghost'}" data-score="${t.transit_id}" aria-label="${t.delay_probability == null ? 'Score' : 'Re-score'} transit ${t.transit_id}">${t.delay_probability == null ? 'Score' : 'Re-score'}</button></td>
     </tr>`).join('');
   const none = state.items.length === 0;
   $('empty').hidden = !none;
   $('tbl').hidden = none;
   if (none) $('empty').innerHTML = '<p>No transits match these filters.</p><button id="reset">Clear filters</button>';
-  $('scoreAll').disabled = none;
+  updateScoreAll();
   const from = none ? 0 : state.offset + 1, to = state.offset + state.items.length;
   $('range').textContent = `Showing ${from}–${to} of ${state.total}`;
-  $('cap').textContent = 'Test-split transits in pickup order';
+  $('cap').textContent = $('sort').value === 'probability' ? 'Highest delay risk first' : 'In pickup order';
   $('prev').disabled = state.offset === 0;
   $('next').disabled = to >= state.total;
 }
 
-function renderAlerts(a) {
-  const open = $('astatus').value === 'open';
-  $('acount').textContent = `${a.count} ${open ? 'open' : 'resolved'}`;
-  $('alerts').innerHTML = a.items.map((x) => `
-    <li>
-      <div class="a-top">${tag(x.severity)} <strong>${esc(x.corridor)}</strong></div>
-      ${x.resolved ? '' : `<button data-resolve="${x.alert_id}" aria-label="Resolve alert for transit ${x.transit_id}">Resolve</button>`}
-      <div class="a-meta">#${x.transit_id} · ${esc(x.rank)} to ${esc(x.destination)} · pickup ${fmtTime(x.scheduled_pickup_time)} · probability ${Number(x.delay_probability).toFixed(2)}</div>
-    </li>`).join('');
-  $('aempty').hidden = a.items.length > 0;
-  $('aempty').innerHTML = open
-    ? '<p>No open alerts. Score transits in the queue to check them for delay risk.</p>'
-    : '<p>No resolved alerts yet.</p>';
-}
-
 async function refresh() {
+  state._busy = true;
+  const mySeq = state._reqSeq = (state._reqSeq || 0) + 1;
   $('tbl').setAttribute('aria-busy', 'true');
-  const q = new URLSearchParams({ split: 'test', limit: state.limit, offset: state.offset, status: $('status').value });
+  const q = new URLSearchParams({
+    split: 'test',
+    limit: state.limit,
+    offset: state.offset,
+    status: state.view === 'unscored' ? 'unscored' : 'all',
+    risk: state.view === 'critical' ? 'critical' : 'all',
+    sort: $('sort').value,
+  });
   if ($('corridor').value) q.set('corridor', $('corridor').value);
+  if (state.search) q.set('q', state.search);
   try {
-    const [s, t, a] = await Promise.all([
-      api('/api/summary'), api('/api/transits?' + q), api('/api/alerts?status=' + $('astatus').value)]);
+    const [s, t, c, u] = await Promise.all([api('/api/summary'), api('/api/transits?' + q), api('/api/transits?split=test&risk=critical&limit=1'), api('/api/transits?split=test&status=unscored&limit=1')]);
+    if (mySeq !== state._reqSeq) return; // superseded by a newer request (e.g. a filter change)
     showError('');
-    state.items = t.items; state.total = t.total;
-    renderFigures(s); renderRows(); renderAlerts(a);
-  } catch (e) { showError(e.message); }
-  $('tbl').setAttribute('aria-busy', 'false');
+    // Compare what is shown (scores, risk, outcome), not just the ids. Comparing ids alone
+    // meant that scoring a transit left the old "Not scored" row on screen.
+    const sig = (items) => items.map((i) => [i.transit_id, i.delay_probability, i.risk_level, i.open_alert, i.predicted_delayed].join(':')).join('|');
+    const changed = sig(state.items) !== sig(t.items) || state.total !== t.total;
+    state.items = t.items; state.total = t.total; state.critical = c.total; state.unscored = u.total;
+    renderFigures(s);
+    $('cap').textContent = $('sort').value === 'probability' ? 'Highest delay risk first' : 'In pickup order';
+    $('searchNote').textContent = state.search ? `${t.total} match${t.total === 1 ? '' : 'es'} for "${state.search}"` : '';
+    if (changed || !state._rendered) { renderRows(); state._rendered = true; }
+    setUpdatedTimestamp('Last updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  } catch (e) { if (mySeq === state._reqSeq) showError(e.message); }
+  finally {
+    if (mySeq === state._reqSeq) { state._busy = false; $('tbl').setAttribute('aria-busy', 'false'); }
+  }
 }
 
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
   try {
-    if (b.dataset.score) { b.disabled = true; await api(`/api/transits/${b.dataset.score}/score`, { method: 'POST' }); }
-    else if (b.dataset.resolve) { b.disabled = true; await api(`/api/alerts/${b.dataset.resolve}/resolve`, { method: 'PATCH' }); }
+    if (b.id === "logout") {
+      b.disabled = true;
+      await api("/logout", { method: "POST" });
+      window.location.replace("/login");
+      return;
+    }
+    if (b.dataset.score) {
+      b.disabled = true;
+      const transitId = b.dataset.score;
+      const result = await api(`/api/transits/${transitId}/score`, { method: 'POST' });
+      const probability = Number(result.delay_probability);
+      const risk = result.risk_level || 'Unknown';
+      const alertRaised = result.alert_raised === true;
+      $('scoreResult').textContent =
+        `Transit #${transitId} scored: ${risk} risk, ${(probability * 100).toFixed(1)}% delay probability.` +
+        (alertRaised ? ' An alert was raised.' : ' No new alert was raised.');
+      $('scoreResult').hidden = false;
+      $('scoreResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
     else if (b.id === 'scoreAll') {
       b.disabled = true; b.textContent = 'Scoring…';
-      await api('/api/transits/score-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transit_ids: state.items.map((t) => t.transit_id) }) });
-      b.textContent = 'Score these transits';
+      const result = await api('/api/transits/score-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transit_ids: state.items.filter((t) => t.delay_probability == null).map((t) => t.transit_id) }) });
+      const parts = [`Scored ${result.scored} transit${result.scored === 1 ? '' : 's'}.`];
+      if (result.alerts_raised) {
+        parts.push(`${result.alerts_raised} transit${result.alerts_raised === 1 ? '' : 's'} raised an alert.`);
+      } else {
+        parts.push('No alerts were raised.');
+      }
+      if (result.not_found && result.not_found.length) {
+        parts.push(`${result.not_found.length} transit${result.not_found.length === 1 ? '' : 's'} not found.`);
+      }
+      if (result.failed && result.failed.length) {
+        parts.push(`${result.failed.length} transit${result.failed.length === 1 ? '' : 's'} could not be scored.`);
+      }
+      $('scoreResult').textContent = parts.join(' ');
+      $('scoreResult').hidden = false;
+      $('scoreResult').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
     else if (b.id === 'prev') { state.offset = Math.max(0, state.offset - state.limit); }
     else if (b.id === 'next') { state.offset += state.limit; }
-    else if (b.id === 'reset') { $('corridor').value = ''; $('status').value = 'all'; state.offset = 0; }
+    else if (b.id === 'reset') { $('corridor').value = ''; setView('all'); }
     else return;
     await refresh();
-  } catch (err) { showError(err.message); b.disabled = false; if (b.id === 'scoreAll') b.textContent = 'Score these transits'; }
+  } catch (err) { showError(err.message); b.disabled = false; if (b.id === 'scoreAll') updateScoreAll(); }
+  });
+
+// ---- search (separate from the filters; matches transit ID) ----
+$('searchForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  state.search = $('search').value.trim();
+  $('searchClear').hidden = !state.search;
+  state.offset = 0; refresh();
 });
-['corridor', 'status'].forEach((id) => $(id).addEventListener('change', () => { state.offset = 0; refresh(); }));
-$('astatus').addEventListener('change', refresh);
+$('searchClear').addEventListener('click', () => {
+  $('search').value = ''; state.search = ''; $('searchClear').hidden = true;
+  $('searchNote').textContent = ''; state.offset = 0; refresh(); $('search').focus();
+});
+$('filtersBtn').addEventListener('click', () => {
+  const open = $('moreFilters').classList.toggle('open');
+  $('filtersBtn').setAttribute('aria-expanded', String(open));
+});
+$('corridor').addEventListener('change', () => { state.offset = 0; refresh(); });
+// quick views: the three chips and the two clickable summary cards share one handler
+document.addEventListener('click', (e) => {
+  const v = e.target.closest('[data-view]'); if (!v) return;
+  setView(state.view === v.dataset.view && v.classList.contains('card') ? 'all' : v.dataset.view);
+  refresh();
+});
+$('sort').addEventListener('change', () => { state.offset = 0; refresh(); });
 $('outcome').addEventListener('change', renderRows);
+
+api("/api/me")
+  .then((user) => {
+    $("currentUser").textContent = user.full_name;
+  })
+  .catch((err) => showError(err.message));
+
 refresh();
+
+// ---- automatic queue refresh ----
+(function () {
+  const REFRESH_MS = 15000;
+  let autoTimer = null;
+
+  function startAutoRefresh(initial) {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    // "initial" (true) also performs an immediate catch-up fetch — used when
+    // the tab becomes visible after being hidden.
+    if (initial && !state._busy) { refresh().catch(() => {}); }
+    autoTimer = setInterval(() => {
+      if (state._busy) return; // in-flight: never stack requests
+      refresh().catch(() => {});
+    }, REFRESH_MS);
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+      return;
+    }
+    startAutoRefresh(true); // resume: immediate catch-up + restart the timer
+  }
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  startAutoRefresh(false); // 15 s timer (first tick after REFRESH_MS)
+})();
+
+// Last-updated timestamp (role=status, aria-live=polite). Only update the
+// visible text (and announce) when the displayed minute changes, so refresh
+// ticks inside the same minute never announce.
+function setUpdatedTimestamp(ts) {
+  if (updatedLastTs === ts) return;
+  updatedLastTs = ts;
+  $('updated').textContent = ts;
+  $('updated').hidden = false;
+}
+
+window.__kqTheme.initTheme();
 </script>
 </body>
 </html>

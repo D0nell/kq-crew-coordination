@@ -126,19 +126,24 @@ def score_transits(conn, transit_ids: List[int]) -> dict:
 
             raised = [r for r in results if r["alert_raised"]]
             if raised:
-                # Re-scoring updates the live alert; a dispatcher's "resolved" is left alone.
+                # Re-scoring updates the live model alert. When the transit still reaches the
+                # configured delay threshold the alert is reopened on conflict (resolved cleared,
+                # resolved_at nulled, generated_at refreshed); a dispatcher's manual resolution is
+                # also cleared. A transit that now falls below the threshold is resolved below.
                 execute_values(cur, """
                     INSERT INTO alerts (transit_id, alert_type, severity, generated_at, resolved,
-                                        delay_probability, source, model_version)
+                                        resolved_at, delay_probability, source, model_version)
                     VALUES %s
                     ON CONFLICT (transit_id) WHERE source = 'model' DO UPDATE SET
                         severity = EXCLUDED.severity,
                         delay_probability = EXCLUDED.delay_probability,
                         model_version = EXCLUDED.model_version,
-                        generated_at = NOW()
+                        generated_at = NOW(),
+                        resolved = FALSE,
+                        resolved_at = NULL
                 """, [(r["transit_id"], "DELAY_WARNING", r["risk_level"], False,
-                       r["delay_probability"], "model", version) for r in raised],
-                    template="(%s, %s, %s, NOW(), %s, %s, %s, %s)")
+                       None, r["delay_probability"], "model", version) for r in raised],
+                    template="(%s, %s, %s, NOW(), %s, %s, %s, %s, %s)")
 
             # A transit that no longer reaches the threshold must not keep a stale open alert.
             cleared = [r["transit_id"] for r in results if not r["alert_raised"]]
