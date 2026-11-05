@@ -1,10 +1,13 @@
-"""API behaviour, invalid input and failure conditions (TC-07 to TC-31)."""
+"""API behaviour, invalid input, failure conditions, sign-in and search (TC-07 to TC-66)."""
 
 import os
+import re
 
 import numpy as np
 import pytest
 from sklearn.metrics import f1_score, precision_score, recall_score
+
+from fastapi.testclient import TestClient
 
 from conftest import first_ids
 
@@ -239,7 +242,7 @@ def test_missing_model_503(client, monkeypatch, tmp_path, actual):
     assert r.status_code == 503 and "train" in r.json()["detail"].lower()
     h = client.get("/health").json()
     assert h["status"] == "degraded" and h["model_file_found"] is False
-    actual("503: " + r.json()["detail"][:80])
+    actual("503: " + re.sub(r"'[^']*'", "'<path>'", r.json()["detail"]))
 
 
 def test_corrupt_model_503(client, monkeypatch, tmp_path, actual):
@@ -250,7 +253,7 @@ def test_corrupt_model_503(client, monkeypatch, tmp_path, actual):
     tid = first_ids(client, 1)[0]
     r = client.post(f"/api/transits/{tid}/score")
     assert r.status_code == 503 and "could not be loaded" in r.json()["detail"]
-    actual("503: " + r.json()["detail"][:80])
+    actual("503: " + re.sub(r"'[^']*'", "'<path>'", r.json()["detail"].split(":")[0]))
 
 
 def test_database_down_503(client, monkeypatch, actual):
@@ -339,17 +342,17 @@ def test_design_assets_served(client, actual):
 
 
 def test_pages_share_layout(client, actual):
-    """TC-36 | GET /dashboard and GET /predict | both pages load the shared stylesheet and script, show the same navigation, a system-status chip and the synthetic-data notice"""
+    """TC-36 | GET /dashboard and GET /predict | both pages load the shared stylesheet and script, show the same navigation, a system-status chip and the synthetic-data notice in the page source"""
     for path in ("/dashboard", "/predict"):
         t = client.get(path).text
         for needle in ('href="/static/kq.css"', 'src="/static/kq.js"', 'id="sysStatus"',
                        'href="/dashboard"', 'href="/predict"', "Synthetic data"):
             assert needle in t, (path, needle)
-            actual("both pages: stylesheet, script, nav links, status chip and synthetic-data notice present")
+    actual("both pages: stylesheet, script, nav links, status chip and synthetic-data notice present")
 
 # ------------------------------------------------------------------ authentication
 def test_unauthenticated_access_rejected(client, actual):
-    """No session: dispatcher-only endpoints are rejected before touching the database."""
+    """TC-52 | Requests with no login to dispatcher-only endpoints | 401 on every one, before any data is read"""
     from fastapi.testclient import TestClient
 
     c = TestClient(app)
@@ -361,7 +364,7 @@ def test_unauthenticated_access_rejected(client, actual):
 
 
 def test_dispatcher_session_grants_access(client, actual):
-    """An authenticated dispatcher session is granted access to dispatcher-only endpoints."""
+    """TC-53 | A signed-in dispatcher calls dispatcher-only endpoints | access granted (200, or a normal 404 for a missing id)"""
     assert client.get("/api/transits").status_code == 200
     assert client.get("/api/alerts").status_code == 200
     assert client.post("/api/transits/99999999/score").status_code == 404
@@ -369,7 +372,7 @@ def test_dispatcher_session_grants_access(client, actual):
 
 
 def test_crew_account_denied_dispatcher_access(crew_client, actual):
-    """A CREW account is authenticated but denied dispatcher-only endpoints (403)."""
+    """TC-54 | A signed-in CREW account calls dispatcher-only endpoints | 403 on every one"""
     assert crew_client.get("/api/transits").status_code == 403
     assert crew_client.get("/api/alerts").status_code == 403
     assert crew_client.get("/api/summary").status_code == 403
@@ -382,7 +385,7 @@ def test_crew_account_denied_dispatcher_access(crew_client, actual):
 
 
 def test_high_risk_creates_model_alert(client, q, actual):
-    """TC-40 | A high-risk transit with no existing alert creates a model alert"""
+    """TC-40 | Score a high-risk transit that has no alert | one open model alert is created with the transit's probability and resolved_at empty"""
     ids = first_ids(client, 30)
     b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
     high_risk = [r for r in b["results"] if r["alert_raised"]]
@@ -403,7 +406,7 @@ def test_high_risk_creates_model_alert(client, q, actual):
 
 
 def test_rescore_high_risk_reopens_already_resolved_model_alert(client, q, actual):
-    """TC-41 | Rescoring a high-risk transit whose model alert is already resolved reopens it and clears resolved_at"""
+    """TC-41 | Re-score a high-risk transit whose alert a dispatcher already resolved | the alert is reopened and resolved_at is cleared"""
     ids = first_ids(client, 30)
     b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
     high_risk = [r for r in b["results"] if r["alert_raised"]]
@@ -433,7 +436,7 @@ def test_rescore_high_risk_reopens_already_resolved_model_alert(client, q, actua
 
 
 def test_rescore_below_threshold_resolves_open_model_alert(client, q, actual, monkeypatch):
-    """TC-42 | A below-threshold rescore resolves the open model alert for that transit"""
+    """TC-42 | Re-score a transit whose probability is now below the alert threshold | its open model alert is resolved automatically"""
     ids = first_ids(client, 30)
     b = client.post("/api/transits/score-batch", json={"transit_ids": ids}).json()
     high_risk = [r for r in b["results"] if r["alert_raised"]]
@@ -451,11 +454,11 @@ def test_rescore_below_threshold_resolves_open_model_alert(client, q, actual, mo
     )[0]
     assert a["resolved"] is True
     assert a["resolved_at"] is not None
-    actual(f"alert reopened at {tid} resolved after below-threshold rescore")
+    actual(f"alert for transit {tid} resolved after below-threshold rescore")
 
 
 def test_repeated_scoring_creates_no_duplicate_model_alerts(client, q, actual):
-    """TC-43 | Repeated scoring of the same transits creates exactly one model alert per transit"""
+    """TC-43 | Score the same transits repeatedly | exactly one model alert per transit, never a duplicate"""
     ids = first_ids(client, 20)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
@@ -469,7 +472,7 @@ def test_repeated_scoring_creates_no_duplicate_model_alerts(client, q, actual):
 
 
 def test_non_model_alerts_not_modified(client, q, actual):
-    """TC-44 | Scoring does not modify non-model (historical) alerts"""
+    """TC-44 | Score transits in a dataset that contains historical alerts | the historical (non-model) alerts are not modified"""
     before = {
         r["alert_id"]: dict(r)
         for r in q("SELECT alert_id, transit_id, severity, resolved, resolved_at FROM alerts WHERE source <> 'model'")
@@ -486,7 +489,7 @@ def test_non_model_alerts_not_modified(client, q, actual):
 
 
 def test_queue_sorts_by_probability_desc(client, q, actual):
-    """TC-XX | GET /api/transits?sort=probability | scored transits ordered by delay_probability DESC, nulls last"""
+    """TC-37 | GET /api/transits?sort=probability | scored transits first, highest delay probability first; unscored transits last"""
     ids = first_ids(client, 60)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     items = client.get("/api/transits", params={"sort": "probability", "limit": 200}).json()["items"]
@@ -498,7 +501,7 @@ def test_queue_sorts_by_probability_desc(client, q, actual):
 
 
 def test_queue_critical_risk_filter(client, q, actual):
-    """TC-XX | GET /api/transits?risk=critical | only scored transits with HIGH/CRITICAL risk"""
+    """TC-38 | GET /api/transits?risk=critical | only scored transits whose risk is HIGH or CRITICAL"""
     ids = first_ids(client, 60)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     critical = q("SELECT transit_id FROM predictions WHERE risk_level IN ('HIGH', 'CRITICAL')")
@@ -514,7 +517,7 @@ def test_queue_critical_risk_filter(client, q, actual):
     "/api/transits?sort=probability&risk=weird",
 ])
 def test_queue_bad_sort_and_risk_params_422(client, url, actual):
-    """TC-XX | GET /api/transits with invalid sort/risk values | 422 validation error"""
+    """TC-39 | GET /api/transits with an invalid sort or risk value | 422 validation error"""
     assert client.get(url).status_code == 422
     actual(f"422 for {url}")
 
@@ -522,7 +525,7 @@ def test_queue_bad_sort_and_risk_params_422(client, url, actual):
 # ------------------------------------------------------------------ bulk alert resolution
 
 def test_bulk_resolve_multiple_open_alerts(client, q, actual):
-    """TC-45 | Multiple open model alerts resolve successfully in one batch."""
+    """TC-45 | Bulk-resolve three open model alerts in one request | all three are resolved with resolved_at set; counts show total 3, resolved 3"""
     ids = first_ids(client, 30)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     open_alerts = q(
@@ -546,7 +549,7 @@ def test_bulk_resolve_multiple_open_alerts(client, q, actual):
 
 
 def test_bulk_resolve_mixed_outcomes(client, q, actual):
-    """TC-46 | Mixed open, already-resolved, unknown and historical IDs."""
+    """TC-46 | Bulk-resolve a mix of open, already-resolved, unknown and historical ids | every id is classified correctly and the request still succeeds"""
     ids = first_ids(client, 40)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     open_alerts = q(
@@ -582,7 +585,7 @@ def test_bulk_resolve_mixed_outcomes(client, q, actual):
 
 
 def test_bulk_resolve_auth(client, crew_client, q, actual):
-    """TC-47 | Dispatcher authorization enforced (unauthenticated, CREW, DISPATCHER)."""
+    """TC-47 | Bulk-resolve called with no login, as CREW and as DISPATCHER | 401, 403 and 200 respectively"""
     ids = first_ids(client, 10)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     open_alerts = [
@@ -603,7 +606,7 @@ def test_bulk_resolve_auth(client, crew_client, q, actual):
 
 
 def test_bulk_resolve_repeated_batch_safe(client, q, actual):
-    """TC-48 | Repeating a batch is safe; resolved_at is not overwritten."""
+    """TC-48 | The same bulk-resolve batch is sent twice | the second call reports already_resolved and resolved_at does not change"""
     ids = first_ids(client, 30)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     open_alerts = q(
@@ -631,7 +634,7 @@ def test_bulk_resolve_repeated_batch_safe(client, q, actual):
 
 
 def test_bulk_resolve_historical_alerts_unchanged(client, q, actual):
-    """TC-49 | Historical (non-model) alerts are never modified by bulk resolve."""
+    """TC-49 | Bulk-resolve that includes historical alert ids | historical alerts are never modified"""
     ids = first_ids(client, 30)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     hist = q("SELECT alert_id, resolved, resolved_at FROM alerts WHERE source <> 'model' ORDER BY alert_id LIMIT 3")
@@ -656,13 +659,14 @@ def test_bulk_resolve_historical_alerts_unchanged(client, q, actual):
     {"alert_ids": [1, 1]}, {"alert_ids": list(range(1, 502))},
 ])
 def test_bulk_resolve_invalid_lists_422(client, bad, actual):
-    """TC-50 | Empty, duplicate, non-positive, non-unique or oversized id lists rejected."""
+    """TC-50 | Bulk-resolve with a missing, empty, non-positive, non-numeric, duplicate or 501-item list | 422 validation error"""
     assert client.post("/api/alerts/bulk-resolve", json=bad).status_code == 422
-    actual(f"422 for {bad}")
+    shown = str(bad) if len(str(bad)) < 60 else f"a list of {len(bad['alert_ids'])} ids"
+    actual(f"422 for {shown}")
 
 
 def test_bulk_resolve_db_error_rolls_back(client, q, monkeypatch, actual):
-    """TC-51 | An unexpected database error rolls back the whole batch."""
+    """TC-51 | A database error part-way through a bulk-resolve | HTTP 503 and the whole batch is rolled back"""
     ids = first_ids(client, 20)
     client.post("/api/transits/score-batch", json={"transit_ids": ids})
     # resolve one model alert individually so the batch contains an already-resolved row
@@ -699,3 +703,161 @@ def test_bulk_resolve_db_error_rolls_back(client, q, monkeypatch, actual):
     still = q("SELECT COUNT(*) AS n FROM alerts WHERE source='model' AND resolved=TRUE AND alert_id = ANY(%s)", (already1,))
     assert still[0]["n"] == 1, "already-resolved alert must be rolled back to resolved"
     actual("503 raised and entire batch rolled back")
+
+
+# ------------------------------------------------------------------ sign-in, sign-out and pages
+# The account below is the one the `client` fixture creates in the throw-away test database.
+DISPATCHER_EMAIL = "test.dispatcher@example.com"
+DISPATCHER_PASSWORD = "TestDispatcher-Only-For-Tests-123!"
+
+
+def test_login_success(client, actual):
+    """TC-55 | Sign in with a valid dispatcher email and password | 200 with the dashboard as the redirect, and /api/me then returns the account with no password data"""
+    c = TestClient(app)
+    r = c.post("/login", json={"email": DISPATCHER_EMAIL, "password": DISPATCHER_PASSWORD})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["role"] == "DISPATCHER" and body["redirect"] == "/dashboard"
+    me = c.get("/api/me")
+    assert me.status_code == 200
+    assert set(me.json()) == {"user_id", "full_name", "role", "email"}
+    assert "password" not in me.text.lower()
+    actual(f"signed in as {me.json()['full_name']} ({me.json()['role']}); /api/me has no password data")
+
+
+def test_login_email_is_case_insensitive(client, actual):
+    """TC-56 | Sign in with the email typed in capital letters | accepted, because emails are compared without case"""
+    c = TestClient(app)
+    r = c.post("/login", json={"email": DISPATCHER_EMAIL.upper(), "password": DISPATCHER_PASSWORD})
+    assert r.status_code == 200 and c.get("/api/me").status_code == 200
+    actual("upper-case email accepted and the session works")
+
+
+@pytest.mark.parametrize("email,password", [
+    (DISPATCHER_EMAIL, "not-the-password-123!"),
+    ("nobody@example.com", DISPATCHER_PASSWORD),
+])
+def test_login_rejected(client, email, password, actual):
+    """TC-57 | Sign in with a wrong password or an unknown email | 401 with the same message for both, and no session is created"""
+    c = TestClient(app)
+    r = c.post("/login", json={"email": email, "password": password})
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Invalid email or password."
+    assert c.get("/api/me").status_code == 401
+    actual("401 'Invalid email or password.' for a wrong password and for an unknown email; no session")
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"email": DISPATCHER_EMAIL}, {"email": DISPATCHER_EMAIL, "password": ""}, {"email": "ab", "password": "x"},
+])
+def test_login_invalid_body_422(client, body, actual):
+    """TC-58 | Sign in with a missing, empty or too-short field | 422 validation error"""
+    assert TestClient(app).post("/login", json=body).status_code == 422
+    actual("422 for no body fields, a missing password, an empty password and a 2-character email")
+
+
+def test_logout_ends_session(client, actual):
+    """TC-59 | Sign out | the session ends: /api/me and dispatcher-only endpoints return 401 afterwards"""
+    assert client.get("/api/me").status_code == 200
+    assert client.post("/logout").json() == {"ok": True}
+    assert client.get("/api/me").status_code == 401
+    assert client.get("/api/transits").status_code == 401
+    actual("200 before sign-out; 401 on /api/me and /api/transits after")
+
+
+@pytest.mark.parametrize("path", ["/dashboard", "/alerts", "/predict"])
+def test_pages_redirect_to_login_when_signed_out(client, path, actual):
+    """TC-60 | Open the dashboard, Alerts or What-if page without being signed in | redirected (303) to /login"""
+    r = TestClient(app, follow_redirects=False).get(path)
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    actual("303 to /login for /dashboard, /alerts and /predict")
+
+
+def test_crew_redirected_from_dashboard(crew_client, actual):
+    """TC-61 | A CREW account opens the dispatcher dashboard | redirected (303) to /predict"""
+    r = crew_client.get("/dashboard", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/predict"
+    actual("303 to /predict")
+
+
+def test_alerts_page_and_shared_navigation(client, actual):
+    """TC-62 | A signed-in user opens /dashboard, /alerts and /predict | every page has a Sign out button and the three-link menu; the Alerts page has the ID search box and alert list"""
+    for path in ("/dashboard", "/alerts", "/predict"):
+        r = client.get(path)
+        assert r.status_code == 200 and "text/html" in r.headers["content-type"], path
+        for needle in ('id="logout"', 'href="/dashboard"', 'href="/alerts"', 'href="/predict"'):
+            assert needle in r.text, (path, needle)
+    page = client.get("/alerts").text
+    for needle in ('id="search"', 'id="alerts"', 'id="astatus"'):
+        assert needle in page, needle
+    actual("all three pages have Sign out and the three menu links; Alerts page has search box and list")
+
+
+# ------------------------------------------------------------------ search by ID
+def test_search_transit_by_id(client, actual):
+    """TC-63 | GET /api/transits?q=<id> | exactly that transit is returned, with or without a leading # or spaces; an unknown id or non-numeric text (including SQL-like text) returns none"""
+    tid = first_ids(client, 1)[0]
+    for term in (str(tid), f"#{tid}", f"  {tid} "):
+        r = client.get("/api/transits", params={"q": term}).json()
+        assert r["total"] == 1 and [i["transit_id"] for i in r["items"]] == [tid], term
+    for term in ("99999999", "abc", "12abc", "1.5", "-3", "1 OR 1=1", "1;--"):
+        r = client.get("/api/transits", params={"q": term})
+        assert r.status_code == 200, term
+        assert r.json()["total"] == 0 and r.json()["items"] == [], term
+    actual(f"transit {tid} found as '{tid}', '#{tid}' and ' {tid} '; 7 unknown or non-numeric terms returned none")
+
+
+def test_search_combines_with_filters(client, actual):
+    """TC-64 | GET /api/transits?q=<id> together with the corridor and status filters | the search narrows within the filters: the right corridor and scored state find the transit, the wrong ones do not"""
+    from api.main import CORRIDORS
+    item = client.get("/api/transits?limit=1").json()["items"][0]
+    tid, corridor = item["transit_id"], item["corridor"]
+    other = next(c for c in CORRIDORS if c != corridor)
+
+    def total(**params):
+        return client.get("/api/transits", params={"q": tid, **params}).json()["total"]
+
+    assert total(corridor=corridor) == 1 and total(corridor=other) == 0
+    assert total(status="unscored") == 1 and total(status="scored") == 0
+    client.post(f"/api/transits/{tid}/score")
+    assert total(status="scored") == 1 and total(status="unscored") == 0
+    actual(f"transit {tid}: found in its own corridor and in the correct scored state only")
+
+
+def test_search_input_limits(client, actual):
+    """TC-65 | GET /api/transits with a blank or over-long q | a blank search is ignored and lists all transits; more than 20 characters is rejected with 422"""
+    base = client.get("/api/transits").json()["total"]
+    assert client.get("/api/transits", params={"q": "   "}).json()["total"] == base
+    assert client.get("/api/transits", params={"q": ""}).json()["total"] == base
+    assert client.get("/api/transits", params={"q": "1" * 21}).status_code == 422
+    actual(f"blank q listed all {base} transits; 21 characters gave 422")
+
+
+
+# ---- crew mobile endpoint (Sprint III)
+def test_my_transits_crew_only(crew_client, client, q, actual):
+    """TC-66 | GET /api/my-transits as a crew member linked to a crew profile | only that crew member's own test-split transits, with a risk label and no recorded outcome; no login gives 401, a dispatcher 403, an unlinked crew account an empty list"""
+    me = crew_client.get("/api/me").json()
+    uid = me["user_id"] if "user_id" in me else q("SELECT user_id FROM users WHERE email=%s", ("test.crew@example.com",))[0]["user_id"]
+    row = q("""SELECT crew_id, COUNT(*) AS n FROM transit_events
+               WHERE split='test' GROUP BY crew_id ORDER BY n DESC LIMIT 1""")[0]
+    crew_id, expected = row["crew_id"], min(row["n"], 50)
+
+    assert TestClient(app).get("/api/my-transits").status_code == 401
+    assert client.get("/api/my-transits").status_code == 403
+    unlinked = crew_client.get("/api/my-transits").json()
+    assert unlinked["total"] == 0 and unlinked["items"] == []
+
+    q("UPDATE crew_profiles SET user_id = %s WHERE crew_id = %s", (uid, crew_id))
+    try:
+        r = crew_client.get("/api/my-transits")
+        assert r.status_code == 200
+        items = r.json()["items"]
+        assert len(items) == expected
+        own = {x["transit_id"] for x in q("SELECT transit_id FROM transit_events WHERE crew_id=%s", (crew_id,))}
+        assert all(i["transit_id"] in own for i in items)
+        assert all("risk_level" in i and "open_alert" in i for i in items)
+        assert not any(k.startswith("actual") or k in ("delay_minutes", "delay_risk_class", "delay_probability") for i in items for k in i)
+    finally:
+        q("UPDATE crew_profiles SET user_id = NULL WHERE user_id = %s", (uid,))
+    actual(f"crew {crew_id}: {expected} own transits returned, no outcomes exposed; 401 / 403 / empty-list cases correct")

@@ -31,7 +31,10 @@ from .config import (  # noqa: E402
     get_alert_threshold, get_model_path,
     get_session_secret, session_https_only,
 )
-from .auth import authenticate_user, get_current_user, require_dispatcher  # noqa: E402
+from .auth import (  # noqa: E402
+    authenticate_user, get_current_user, require_crew, require_dispatcher,
+)
+
 from .db import fetch_all, fetch_one, get_conn  # noqa: E402
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -294,6 +297,39 @@ def list_transits(
         items = fetch_all(conn, TRANSIT_SELECT + clause +
                           " ORDER BY " + order_by + " LIMIT %(limit)s OFFSET %(offset)s", params)
     return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+# --------------------------------------------------------------------------
+# Crew mobile app (Sprint III): a crew member sees only their own transits.
+# Delay risk is shown as a label only; recorded outcomes are never exposed.
+@app.get("/api/my-transits")
+def my_transits(
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_crew),
+):
+    """Upcoming and recent transits of the signed-in crew member (test split)."""
+    with get_conn() as conn:
+        items = fetch_all(
+            conn,
+            """
+            SELECT t.transit_id, t.corridor, t.pickup_location, t.dropoff_location,
+                   t.scheduled_pickup_time, t.scheduled_arrival_time,
+                   v.vehicle_type, f.flight_number, f.destination,
+                   p.risk_level,
+                   EXISTS (SELECT 1 FROM alerts a WHERE a.transit_id = t.transit_id
+                           AND a.source = 'model' AND a.resolved = FALSE) AS open_alert
+            FROM transit_events t
+            JOIN crew_profiles c    ON c.crew_id = t.crew_id
+            JOIN vehicles v         ON v.vehicle_id = t.vehicle_id
+            JOIN flight_schedules f ON f.flight_id = t.flight_id
+            LEFT JOIN predictions p ON p.transit_id = t.transit_id
+            WHERE c.user_id = %(uid)s AND t.split = 'test'
+            ORDER BY t.scheduled_pickup_time, t.transit_id
+            LIMIT %(limit)s
+            """,
+            {"uid": user["user_id"], "limit": limit},
+        )
+    return {"total": len(items), "items": items}
 
 
 @app.post("/api/transits/score-batch", dependencies=[Depends(require_dispatcher)])

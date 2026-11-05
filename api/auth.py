@@ -86,3 +86,17 @@ def require_dispatcher(request: Request):
         )
 
     return user
+
+
+
+def require_crew(request: Request):
+    """Allow the crew-facing mobile endpoints only for crew accounts."""
+    user = get_current_user(request)
+
+    if user["role"] != "CREW":
+        raise HTTPException(
+            status_code=403,
+            detail="Crew access is required.",
+        )
+
+    return user
