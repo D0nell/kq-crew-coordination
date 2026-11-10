@@ -45,6 +45,43 @@
       <p id="message" role="alert" aria-live="polite"></p>
       <button id="submit" type="submit">Sign in</button>
     </form>
+    <div style="margin-top:16px;text-align:center">
+  <div style="color:var(--muted);font-size:13px;margin:8px 0">or</div>
+  <div id="google-btn" style="display:flex;justify-content:center;min-height:44px"></div>
+  <div id="google-msg" role="status" style="font-size:14px;min-height:1.4em;margin-top:8px;color:var(--bad-ink)"></div>
+  <div style="margin-top:12px;font-size:14px;color:var(--muted)">New here? <a href="/signup">Create a crew account</a></div>
+</div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+(function () {
+  var msg = document.getElementById('google-msg');
+  function onCredential(resp) {
+    msg.textContent = 'Signing you in...';
+    fetch('/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential: resp.credential })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+    }).then(function (res) {
+      if (res.ok) { window.location.href = res.d.redirect || '/predict'; }
+      else { msg.textContent = res.d.detail || 'Google sign-in failed.'; }
+    }).catch(function () { msg.textContent = 'Cannot reach the server. Please try again.'; });
+  }
+  function start(clientId) {
+    if (!window.google || !google.accounts || !google.accounts.id) {
+      setTimeout(function () { start(clientId); }, 200);
+      return;
+    }
+    google.accounts.id.initialize({ client_id: clientId, callback: onCredential });
+    google.accounts.id.renderButton(document.getElementById('google-btn'),
+      { theme: 'outline', size: 'large', text: 'signin_with', width: 300 });
+  }
+  fetch('/api/auth-config').then(function (r) { return r.json(); }).then(function (c) {
+    if (c.google_client_id) { start(c.google_client_id); }
+  });
+})();
+</script>
   </main>
   <script>
     const form = document.getElementById("login-form");

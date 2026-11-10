@@ -41,3 +41,10 @@ def get_session_secret() -> str:
 def session_https_only() -> bool:
     """Require HTTPS for session cookies in production."""
     return os.environ.get("APP_ENV", "development").lower() == "production"
+
+
+
+def get_google_client_ids() -> list:
+    """Google OAuth client ID(s) the server accepts tokens for (first one is the web client)."""
+    raw = os.environ.get("GOOGLE_CLIENT_ID", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]

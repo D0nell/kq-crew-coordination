@@ -28,11 +28,12 @@ from ml.preprocessing.load_data import CATEGORICAL_COLS, encode_new_record  # no
 
 from . import scoring  # noqa: E402
 from .config import (  # noqa: E402
-    get_alert_threshold, get_model_path,
+    get_alert_threshold, get_google_client_ids , get_model_path,
     get_session_secret, session_https_only,
 )
 from .auth import (  # noqa: E402
-    authenticate_user, get_current_user, require_crew, require_dispatcher,
+    GoogleNotConfigured, GoogleSignInError, authenticate_user, get_current_user,
+    require_crew, require_dispatcher, sign_in_with_google, verify_google_credential,
 )
 
 from .db import fetch_all, fetch_one, get_conn  # noqa: E402
@@ -82,6 +83,8 @@ class LoginRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=160)
     password: str = Field(..., min_length=1, max_length=256)
 
+class GoogleLoginRequest(BaseModel):
+    credential: str = Field(..., min_length=20, max_length=4096)
 
 class TransitRequest(BaseModel):
     """Raw inputs for one transit — the API encodes categoricals internally."""
@@ -140,6 +143,40 @@ def login(body: LoginRequest, request: Request):
     destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
     return {"ok": True, "role": user["role"], "redirect": destination}
 
+@app.get("/signup", include_in_schema=False)
+def signup_page(request: Request):
+    try:
+        user = get_current_user(request)
+        destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
+        return RedirectResponse(destination, status_code=303)
+    except HTTPException:
+        return FileResponse(os.path.join(STATIC_DIR, "signup.html"), media_type="text/html")
+
+
+@app.get("/api/auth-config")
+def auth_config():
+    """Public sign-in settings. A Google client ID is not a secret."""
+    ids = get_google_client_ids()
+    return {"google_client_id": ids[0] if ids else None}
+
+
+@app.post("/auth/google")
+def google_login(body: GoogleLoginRequest, request: Request):
+    """Sign in, or sign up as a CREW member, with a Google ID token."""
+    try:
+        claims = verify_google_credential(body.credential)
+    except GoogleNotConfigured:
+        raise HTTPException(status_code=503, detail="Google sign-in is not set up on this server.")
+    except GoogleSignInError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    try:
+        user, created = sign_in_with_google(claims)
+    except GoogleSignInError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+    request.session.clear()
+    request.session["user_id"] = user["user_id"]
+    destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
+    return {"ok": True, "role": user["role"], "created": created, "redirect": destination}
 
 @app.post("/logout")
 def logout(request: Request):
