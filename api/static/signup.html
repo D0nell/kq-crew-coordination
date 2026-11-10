@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KQ Crew Coordination — Sign up</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/kq.css">
+  <script src="/static/theme.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    .auth-wrap { min-height: 100vh; display: grid; place-items: center; padding: var(--sp-4); }
+    .auth-card { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--line);
+      border-top: 3px solid var(--kq-red); border-radius: var(--r-2); padding: var(--sp-5); box-shadow: var(--shadow); }
+    .auth-card h1 { font-size: var(--fs-5); margin: 0 0 var(--sp-2); }
+    .auth-card p { color: var(--ink-2); margin: 0 0 var(--sp-4); }
+    .auth-note { background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: var(--r-1);
+      padding: var(--sp-3); font-size: var(--fs-2); color: var(--ink-2); margin-bottom: var(--sp-4); }
+    #google-btn { min-height: 44px; display: flex; justify-content: center; }
+    #auth-msg { margin-top: var(--sp-3); font-size: var(--fs-2); min-height: 1.4em; }
+    #auth-msg.err { color: var(--bad-ink); }
+    .auth-alt { margin-top: var(--sp-4); font-size: var(--fs-2); color: var(--muted); text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="auth-wrap">
+    <section class="auth-card" aria-labelledby="t">
+      <h1 id="t">Create a crew account</h1>
+      <p>Sign up with your Google account to see your own crew transits.</p>
+      <div class="auth-note">
+        New accounts are <strong>crew accounts</strong>. Dispatcher access is granted
+        by an administrator, never by signing up.
+      </div>
+      <div id="google-btn" aria-live="polite"></div>
+      <div id="auth-msg" role="status"></div>
+      <div class="auth-alt">Already have an account? <a href="/login">Sign in</a></div>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var msg = document.getElementById('auth-msg');
+      function show(text, isErr) { msg.textContent = text; msg.className = isErr ? 'err' : ''; }
+
+      function onCredential(resp) {
+        show('Signing you in...', false);
+        fetch('/auth/google', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential: resp.credential })
+        }).then(function (r) {
+          return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+        }).then(function (res) {
+          if (res.ok) { window.location.href = res.d.redirect || '/predict'; }
+          else { show(res.d.detail || 'Sign-up failed. Please try again.', true); }
+        }).catch(function () { show('Cannot reach the server. Please try again.', true); });
+      }
+
+      function start(clientId) {
+        if (!window.google || !google.accounts || !google.accounts.id) {
+          setTimeout(function () { start(clientId); }, 200);
+          return;
+        }
+        google.accounts.id.initialize({ client_id: clientId, callback: onCredential });
+        google.accounts.id.renderButton(document.getElementById('google-btn'),
+          { theme: 'outline', size: 'large', text: 'signup_with', width: 300 });
+      }
+
+      fetch('/api/auth-config').then(function (r) { return r.json(); }).then(function (c) {
+        if (!c.google_client_id) { show('Google sign-up is not set up on this server yet.', true); return; }
+        start(c.google_client_id);
+      }).catch(function () { show('Cannot reach the server. Please try again.', true); });
+    })();
+  </script>
+</body>
+</html>
