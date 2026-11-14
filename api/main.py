@@ -37,6 +37,7 @@ from .auth import (  # noqa: E402
 )
 
 from .db import fetch_all, fetch_one, get_conn  # noqa: E402
+from .crew_features import router as crew_router  # noqa: E402
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 CORRIDORS = ["Mombasa Rd - JKIA", "Westlands - JKIA", "Embakasi - JKIA",
@@ -59,6 +60,7 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(crew_router)
 
 
 # --------------------------------------------------------------------------
