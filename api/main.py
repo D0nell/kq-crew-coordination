@@ -84,9 +84,11 @@ async def db_unreachable_handler(request: Request, exc: psycopg2.OperationalErro
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=160)
     password: str = Field(..., min_length=1, max_length=256)
+    role: Optional[Literal["CREW", "DISPATCHER"]] = None  # the choice made on the sign-in screen
 
 class GoogleLoginRequest(BaseModel):
     credential: str = Field(..., min_length=20, max_length=4096)
+    role: Optional[Literal["CREW", "DISPATCHER"]] = None  # the choice made on the sign-in screen
 
 class TransitRequest(BaseModel):
     """Raw inputs for one transit — the API encodes categoricals internally."""
@@ -125,6 +127,19 @@ def root():
             "dashboard": "/dashboard", "docs": "/docs"}
 
 
+def _require_chosen_role(user: dict, chosen: Optional[str]) -> None:
+    """If the person picked Crew or Dispatcher on the sign-in screen, it must match the account.
+
+    The account decides the real role; the choice can never grant access, it can only refuse.
+    """
+    if chosen and user["role"] != chosen:
+        kind = "dispatcher" if user["role"] == "DISPATCHER" else "crew"
+        raise HTTPException(
+            status_code=403,
+            detail=f"This is a {kind} account. Choose {kind.capitalize()} to sign in.",
+        )
+
+
 @app.get("/login", include_in_schema=False)
 def login_page(request: Request):
     try:
@@ -140,6 +155,7 @@ def login(body: LoginRequest, request: Request):
     user = authenticate_user(body.email, body.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+    _require_chosen_role(user, body.role)
     request.session.clear()
     request.session["user_id"] = user["user_id"]
     destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
@@ -171,10 +187,24 @@ def google_login(body: GoogleLoginRequest, request: Request):
         raise HTTPException(status_code=503, detail="Google sign-in is not set up on this server.")
     except GoogleSignInError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
+    if body.role == "DISPATCHER":
+        # Signing up always creates a CREW account, so a dispatcher must already exist.
+        with get_conn() as conn:
+            known = fetch_one(
+                conn,
+                "SELECT user_id FROM users WHERE google_sub = %s OR LOWER(email) = %s",
+                (str(claims["sub"]), claims["email"].strip().lower()),
+            )
+        if not known:
+            raise HTTPException(
+                status_code=403,
+                detail="No dispatcher account exists for this Google email. Ask an administrator.",
+            )
     try:
         user, created = sign_in_with_google(claims)
     except GoogleSignInError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
+    _require_chosen_role(user, body.role)
     request.session.clear()
     request.session["user_id"] = user["user_id"]
     destination = "/dashboard" if user["role"] == "DISPATCHER" else "/predict"
