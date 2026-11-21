@@ -295,6 +295,11 @@ def crew_client(loaded_db):
     # which test file runs first.
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE crew_profiles SET user_id = NULL "
+                "WHERE user_id = (SELECT user_id FROM users WHERE email = %s)",
+                (test_email,),
+            )
             cur.execute("DELETE FROM users WHERE email = %s", (test_email,))
 
     return test_client

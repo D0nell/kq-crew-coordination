@@ -118,6 +118,17 @@ class BatchScoreRequest(BaseModel):
     transit_ids: List[PositiveInt] = Field(..., min_length=1, max_length=200)
 
 
+class ApprovalRequest(BaseModel):
+    """Body for POST /api/transits/{transit_id}/approve.
+
+    The dispatcher can optionally re-latch a proposal onto a different crew
+    member / vehicle before it is approved.  Passing neither field leaves the
+    current assignment untouched.
+    """
+    crew_id: Optional[PositiveInt] = None
+    vehicle_id: Optional[PositiveInt] = None
+
+
 # --------------------------------------------------------------------------
 # Basic endpoints
 # --------------------------------------------------------------------------
@@ -393,6 +404,7 @@ def my_transits(
             JOIN flight_schedules f ON f.flight_id = t.flight_id
             LEFT JOIN predictions p ON p.transit_id = t.transit_id
             WHERE c.user_id = %(uid)s AND t.split = 'test'
+                  AND t.schedule_status = 'APPROVED'
             ORDER BY t.scheduled_pickup_time, t.transit_id
             LIMIT %(limit)s
             """,
@@ -585,3 +597,284 @@ def summary():
     return {**counts, "alert_threshold": get_alert_threshold(), "model_version": scoring.model_version(),
             "replay": {"scored_test_transits": m["n"], "tp": tp, "fp": fp, "fn": fn, "tn": m["tn"],
                        "precision": rnd(precision), "recall": rnd(recall), "f1": rnd(f1)}}
+
+
+# --------------------------------------------------------------------------
+# Scheduling board (FR-06)
+# --------------------------------------------------------------------------
+# Dispatch state: an assignment is PROPOSED (crew + vehicle proposed, not yet
+# approved), APPROVED (locked in), or REJECTED (rejected and pending a re-plan).
+APPROVED = "APPROVED"
+PROPOSED = "PROPOSED"
+REJECTED = "REJECTED"
+
+
+# Proposals: every transit whose schedule_status is PROPOSED, joined to its
+# assigned crew and vehicle (LEFT JOIN so a cleared assignment still lists).
+PROPOSAL_SELECT = """
+SELECT t.transit_id,
+       t.corridor,
+       t.scheduled_pickup_time,
+       t.scheduled_arrival_time,
+       t.schedule_status,
+       c.crew_id AS crew_id,
+       c.rank AS rank,
+       c.base_location AS base_location,
+       v.vehicle_id AS vehicle_id,
+       v.vehicle_type AS vehicle_type,
+       v.capacity AS capacity
+FROM transit_events t
+LEFT JOIN crew_profiles c ON c.crew_id = t.crew_id
+LEFT JOIN vehicles v ON v.vehicle_id = t.vehicle_id
+WHERE t.schedule_status = 'PROPOSED'
+"""
+
+
+def _crew_rank(conn, crew_id):
+    """Rank of a crew member, or None when the crew does not exist."""
+    if crew_id is None:
+        return None
+    row = fetch_one(conn, "SELECT rank FROM crew_profiles WHERE crew_id = %s", (crew_id,))
+    return row["rank"] if row else None
+
+
+def _find_available_crew(conn, start, end, preferred_rank=None):
+    """First available crew member, preferring a rank match on `preferred_rank`.
+
+    An available crew has no other transit in PROPOSED or APPROVED state whose
+    time window overlaps this transit.  When `preferred_rank` is given (the rank
+    of the transit's current crew) the search is limited to that rank; otherwise
+    any available crew ("general") is returned.
+    """
+    params = {
+        "start": start,
+        "end": end,
+        "prop": PROPOSED,
+        "approved": APPROVED,
+    }
+    if preferred_rank is not None:
+        crew = fetch_one(
+            conn,
+            """
+            SELECT crew_id, rank, base_location
+            FROM crew_profiles
+            WHERE rank = %(rank)s
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM transit_events t2
+                    WHERE t2.crew_id = crew_profiles.crew_id
+                      AND t2.scheduled_pickup_time < %(end)s
+                      AND t2.scheduled_arrival_time > %(start)s
+                      AND t2.schedule_status IN (%(prop)s, %(approved)s)
+                  )
+            LIMIT 1
+            """,
+            {**params, "rank": preferred_rank},
+        )
+        if crew is not None:
+            return crew
+    # General: any available crew.
+    return fetch_one(
+        conn,
+        """
+        SELECT crew_id, rank, base_location
+        FROM crew_profiles
+        WHERE NOT EXISTS (
+                SELECT 1
+                FROM transit_events t2
+                WHERE t2.crew_id = crew_profiles.crew_id
+                  AND t2.scheduled_pickup_time < %(end)s
+                  AND t2.scheduled_arrival_time > %(start)s
+                  AND t2.schedule_status IN (%(prop)s, %(approved)s)
+              )
+        LIMIT 1
+        """,
+        params,
+    )
+
+
+def _find_available_vehicle(conn, start, end):
+    """First vehicle with status = 'AVAILABLE' and no overlapping transit."""
+    return fetch_one(
+        conn,
+        """
+        SELECT vehicle_id, vehicle_type, capacity
+        FROM vehicles
+        WHERE status = 'AVAILABLE'
+          AND NOT EXISTS (
+                SELECT 1
+                FROM transit_events t2
+                WHERE t2.vehicle_id = vehicles.vehicle_id
+                  AND t2.scheduled_pickup_time < %(end)s
+                  AND t2.scheduled_arrival_time > %(start)s
+                  AND t2.schedule_status IN (%(prop)s, %(approved)s)
+              )
+        LIMIT 1
+        """,
+        {
+            "start": start,
+            "end": end,
+            "prop": PROPOSED,
+            "approved": APPROVED,
+        },
+    )
+
+
+@app.post("/api/scheduling/generate", dependencies=[Depends(require_dispatcher)])
+def generate_schedule():
+    """Auto-assign crew and vehicles to transits that are not yet approved.
+
+    A transit is "unassigned" while its schedule_status is not APPROVED
+    (PROPOSED, REJECTED, or unset).  They are scheduled in order of
+    "fewest assigned transits first": for every unassigned transit we count the
+    number of already-scheduled transits (PROPOSED or APPROVED) on the same
+    corridor whose time window overlaps, and we place the transit with the
+    smallest count first so a crew or vehicle is never forced onto an already
+    crowded corridor once its free slots are taken.
+
+    For each transit, in that order:
+      1. pick an available crew member.  If the transit already has a crew, the
+         crew's rank is matched first, then any available crew ("general").
+      2. pick an available vehicle: status = 'AVAILABLE' and no overlapping
+         transit.
+      3. assign crew_id / vehicle_id and set schedule_status = 'PROPOSED'.
+
+    Returns the number of transits scheduled and their ids.
+    """
+    with get_conn() as conn:
+        unassigned = fetch_all(
+            conn,
+            """
+            SELECT transit_id, corridor, scheduled_pickup_time, scheduled_arrival_time,
+                   crew_id
+            FROM transit_events
+            WHERE schedule_status = 'PROPOSED' AND (crew_id IS NULL OR vehicle_id IS NULL)
+            ORDER BY (
+                       SELECT COUNT(*)
+                       FROM transit_events AS t2
+                       WHERE t2.schedule_status IN (%(prop)s, %(approved)s)
+                         AND t2.corridor = transit_events.corridor
+                         AND t2.scheduled_pickup_time < transit_events.scheduled_arrival_time
+                         AND t2.scheduled_arrival_time > transit_events.scheduled_pickup_time
+                         AND t2.transit_id <> transit_events.transit_id
+                     ) ASC,
+                     scheduled_pickup_time ASC,
+                     transit_id ASC
+            """,
+            {"approved": APPROVED, "prop": PROPOSED},
+        )
+        scheduled = []
+        for t in unassigned:
+            preferred_rank = _crew_rank(conn, t.get("crew_id")) if t.get("crew_id") else None
+            crew = _find_available_crew(
+                conn,
+                t["scheduled_pickup_time"],
+                t["scheduled_arrival_time"],
+                preferred_rank,
+            )
+            vehicle = _find_available_vehicle(
+                conn,
+                t["scheduled_pickup_time"],
+                t["scheduled_arrival_time"],
+            )
+            if crew is None or vehicle is None:
+                continue
+            fetch_one(
+                conn,
+                """
+                UPDATE transit_events
+                SET crew_id = %(crew_id)s,
+                    vehicle_id = %(vehicle_id)s,
+                    schedule_status = %(status)s
+                WHERE transit_id = %(tid)s
+                RETURNING transit_id
+                """,
+                {
+                    "crew_id": crew["crew_id"],
+                    "vehicle_id": vehicle["vehicle_id"],
+                    "status": PROPOSED,
+                    "tid": t["transit_id"],
+                },
+            )
+            scheduled.append(t["transit_id"])
+    return {"scheduled": len(scheduled), "transit_ids": scheduled}
+
+
+@app.get("/api/scheduling/proposals", dependencies=[Depends(require_dispatcher)])
+def list_proposals():
+    """Every transit with a pending proposal (schedule_status = PROPOSED),
+    with the assigned crew and vehicle details."""
+    with get_conn() as conn:
+        items = fetch_all(
+            conn,
+            PROPOSAL_SELECT + " ORDER BY t.scheduled_pickup_time ASC, t.transit_id ASC",
+            {},
+        )
+    return {"total": len(items), "items": items}
+
+
+@app.post("/api/transits/{transit_id}/approve", dependencies=[Depends(require_dispatcher)])
+def approve_transit(transit_id: PositiveInt, body: Optional[ApprovalRequest] = None):
+    """Lock in a proposal: set schedule_status = 'APPROVED'.
+
+    If the dispatcher supplies crew_id / vehicle_id in the body, the existing
+    assignment is re-latched onto those values first.  Passing neither field
+    leaves the current assignment untouched.
+    """
+    crew_id = body.crew_id if body else None
+    vehicle_id = body.vehicle_id if body else None
+    with get_conn() as conn:
+        if crew_id is not None:
+            crew = fetch_one(conn, "SELECT crew_id FROM crew_profiles WHERE crew_id = %s", (crew_id,))
+            if crew is None:
+                raise HTTPException(status_code=404, detail=f"Crew {crew_id} not found")
+        if vehicle_id is not None:
+            vehicle = fetch_one(conn, "SELECT vehicle_id FROM vehicles WHERE vehicle_id = %s", (vehicle_id,))
+            if vehicle is None:
+                raise HTTPException(status_code=404, detail=f"Vehicle {vehicle_id} not found")
+        row = fetch_one(
+            conn,
+            """
+            UPDATE transit_events
+            SET schedule_status = %(status)s,
+                crew_id = COALESCE(%(crew_id)s, crew_id),
+                vehicle_id = COALESCE(%(vehicle_id)s, vehicle_id)
+            WHERE transit_id = %(tid)s
+            RETURNING transit_id, crew_id, vehicle_id, schedule_status
+            """,
+            {
+                "status": APPROVED,
+                "crew_id": crew_id,
+                "vehicle_id": vehicle_id,
+                "tid": transit_id,
+            },
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Transit {transit_id} not found")
+        return row
+
+
+@app.post("/api/transits/{transit_id}/replan", dependencies=[Depends(require_dispatcher)])
+def replan_transit(transit_id: PositiveInt):
+    """Re-propose a transit when high risk is detected.
+
+    Resets the assignment (crew and vehicle cleared) and sets the schedule
+    status back to PROPOSED so the dispatch board can re-plan it.  The
+    dispatcher then re-runs generate or submits a fresh assignment.
+    """
+    with get_conn() as conn:
+        row = fetch_one(
+            conn,
+            """
+            UPDATE transit_events
+            SET schedule_status = %(status)s,
+                crew_id = NULL,
+                vehicle_id = NULL
+            WHERE transit_id = %(tid)s
+            RETURNING transit_id, crew_id, vehicle_id, schedule_status
+            """,
+            {"status": PROPOSED, "tid": transit_id},
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Transit {transit_id} not found")
+        return row

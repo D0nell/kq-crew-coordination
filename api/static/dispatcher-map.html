@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew location map — Dispatcher Desk</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/kq.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  #map { height: 520px; border-radius: var(--r-2); }
+  .loc-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+  .loc-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--focus); }
+  .loc-info { flex: 1 1 0; min-width: 0; }
+  .loc-name { font-weight: 650; }
+  .loc-sub { font-size: var(--fs-1); color: var(--muted); }
+  .loc-status { font-size: var(--fs-1); font-weight: 650; white-space: nowrap; }
+  .kq-pin { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(16,26,43,.35); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="brand"><b>KQ <i>Crew</i> Coordination</b><span>Dispatcher desk</span></div>
+    <nav>
+      <a href="/dashboard" aria-current="page">Transit queue</a>
+      <a href="/alerts">Alerts</a>
+      <a href="/predict">What-if prediction</a>
+      <a href="/dispatcher-map">Crew locations</a>
+    </nav>
+    <div class="foot">Capstone prototype. Not an official Kenya Airways system.</div>
+  </aside>
+  <div class="content">
+    <header class="topbar">
+      <h1>Crew location map</h1>
+      <div class="sub">Last known positions of crew on in-flight transits (&ge;10 min old). Click a marker or a row to re-center.</div>
+      <span id="sysStatus" class="status"></span>
+    </header>
+    <main class="page">
+      <div class="panel">
+        <h2>Crew on duty</h2>
+        <div id="map"></div>
+        <p class="who">Rendered from <code>/api/crew-locations</code> (FR-10). Pings are oldest-first inside the panel; the marker colour shows whether the transit has been arrived on.</p>
+      </div>
+      <div class="panel">
+        <h2>Locations</h2>
+        <ul id="locList"></ul>
+        <p class="empty" id="emptyLoc">No crew locations shared in the last 10 minutes.</p>
+      </div>
+    </main>
+  </div>
+</div>
+<script src="/static/kq.js"></script>
+<script src="/static/theme.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/dispatcher-map.js"></script>
+</body>
+</html>
